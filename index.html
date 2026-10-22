@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MK Finances</title>
+  <meta name="theme-color" content="#0f766e">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- Loading -->
+  <div id="loader" class="loader"><div class="spinner"></div><p>Loading MK Finances…</p></div>
+
+  <!-- First-time connection setup -->
+  <section id="setup" class="center-screen hidden">
+    <div class="auth-card">
+      <div class="brand big"><span class="logo">MK</span><div><b>MK Finances</b><small>Connect your database</small></div></div>
+      <ol class="steps">
+        <li>Create a free project at <b>supabase.com</b></li>
+        <li>Open <b>SQL Editor</b>, paste <b>supabase-schema.sql</b> and press <b>Run</b></li>
+        <li>Go to <b>Project Settings → API</b> and copy the Project URL and the anon public key</li>
+      </ol>
+      <form id="setupForm" class="stack">
+        <label class="field"><span>Project URL</span><input name="url" placeholder="https://xxxx.supabase.co" required></label>
+        <label class="field"><span>Anon public key</span><input name="key" placeholder="eyJhbGciOi…" required></label>
+        <button class="btn primary block" type="submit">Connect</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Sign in / sign up -->
+  <section id="auth" class="center-screen hidden">
+    <div class="auth-card">
+      <div class="brand big"><span class="logo">MK</span><div><b>MK Finances</b><small>Accounts, stock, payroll & more — made simple</small></div></div>
+      <div class="seg" id="authSeg">
+        <button type="button" data-m="login" class="on">Sign in</button>
+        <button type="button" data-m="signup">Create account</button>
+      </div>
+      <form id="authForm" class="stack">
+        <label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" required></label>
+        <label class="field" id="passField"><span>Password</span><input name="password" type="password" minlength="6" autocomplete="current-password" required></label>
+        <button class="btn primary block" type="submit" id="authBtn">Sign in</button>
+        <button class="link" type="button" id="forgotBtn">Forgot password?</button>
+        <p class="auth-msg" id="authMsg"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- Main app -->
+  <div id="app" class="hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">MK</span><div><b>MK Finances</b><small id="bizName">My Business</small></div></div>
+      <div class="role-tag" id="roleTag">Owner</div>
+      <nav class="nav" id="nav"></nav>
+      <div class="side-foot">
+        <div class="who" id="whoEmail"></div>
+        <button class="btn ghost sm block" onclick="signOut()">Sign out</button>
+      </div>
+    </aside>
+    <div class="scrim" onclick="document.body.classList.remove('nav-open')"></div>
+    <div class="content">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" onclick="document.body.classList.toggle('nav-open')" aria-label="Menu" id="menuBtn"></button>
+        <h1 id="pageTitle">Dashboard</h1>
+        <span class="grow"></span>
+        <button class="btn primary sm" onclick="quickNew()" id="quickBtn">+ New</button>
+        <button class="icon-btn" onclick="toggleTheme()" aria-label="Theme" id="themeBtn"></button>
+      </header>
+      <main id="main" class="main"></main>
+    </div>
+  </div>
+
+  <div id="modal" class="modal"></div>
+  <div id="toast" class="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
