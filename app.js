@@ -3,13 +3,17 @@
    MK Finances — simple accounting & business management
    Plain HTML + CSS + JavaScript, data saved in Supabase.
 
-   OPTIONAL: paste your Supabase details here. If left empty, the app
-   asks for them on first launch and remembers them in the browser.
+   YOUR SUPABASE CONNECTION — fixed here, so users never see a setup screen.
+   Paste your Publishable key (starts with sb_publishable_) below.
+   It is safe to put in the browser: Row Level Security protects the data.
    ===================================================================== */
 const CONFIG = {
-  SUPABASE_URL: '',
-  SUPABASE_ANON_KEY: '',
+  SUPABASE_URL: 'https://uaimycrlimsaccsbsuhl.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_LdwkC4J_m8godouPxo4rYg_vVgG6gu1',
 };
+const cleanUrl = u => { const m = String(u || '').trim().match(/^https?:\/\/[^/\s]+/i); return m ? m[0] : ''; };
+const cfgKey = () => (/^PASTE_/.test(CONFIG.SUPABASE_ANON_KEY) ? '' : CONFIG.SUPABASE_ANON_KEY.trim());
+const fixedConnection = () => !!(cleanUrl(CONFIG.SUPABASE_URL) && cfgKey());
 
 /* ===================== State ===================== */
 let sb = null;
@@ -463,8 +467,8 @@ async function boot() {
   applyTheme();
   $('#menuBtn').innerHTML = ic('menu');
   $('#themeBtn').innerHTML = ic('moon');
-  const url = CONFIG.SUPABASE_URL || localStorage.getItem('mkf_url') || '';
-  const key = CONFIG.SUPABASE_ANON_KEY || localStorage.getItem('mkf_key') || '';
+  const url = fixedConnection() ? cleanUrl(CONFIG.SUPABASE_URL) : cleanUrl(localStorage.getItem('mkf_url'));
+  const key = fixedConnection() ? cfgKey() : (localStorage.getItem('mkf_key') || '');
   if (!url || !key) return showSetup();
   if (!window.supabase) { showOnly('setup'); toast('Could not load Supabase library. Check your internet.', 'err'); return; }
   try {
@@ -488,7 +492,7 @@ function showSetup() {
   $('#setupForm').onsubmit = e => {
     e.preventDefault();
     const f = e.target;
-    localStorage.setItem('mkf_url', f.url.value.trim().replace(/\/$/, ''));
+    localStorage.setItem('mkf_url', cleanUrl(f.url.value));
     localStorage.setItem('mkf_key', f.key.value.trim());
     location.reload();
   };
@@ -529,10 +533,19 @@ function showAuth() {
         await startApp();
       }
     } catch (err) {
-      msg.className = 'auth-msg err'; msg.textContent = err.message || String(err);
+      msg.className = 'auth-msg err'; msg.textContent = friendlyAuthError(err);
     } finally { btn.disabled = false; }
   };
   setMode(UI.authMode === 'reset' ? 'login' : UI.authMode);
+}
+
+function friendlyAuthError(err) {
+  const m = String(err?.message || err || '');
+  if (/rate limit/i.test(m)) return 'Too many emails sent in the last hour (Supabase free limit). Please wait, or ask the admin to turn off "Confirm email" in Supabase.';
+  if (/invalid login credentials/i.test(m)) return 'Wrong email or password.';
+  if (/email not confirmed/i.test(m)) return 'Please open the confirmation email we sent you, click the link, then sign in.';
+  if (/already registered/i.test(m)) return 'This email already has an account. Use Sign in instead.';
+  return m;
 }
 
 function askNewPassword() {
@@ -2046,7 +2059,7 @@ PAGES.settings = () => {
   <div class="card"><div class="card-head"><h3>Database</h3></div>
     <p class="muted small" style="margin:0 0 12px">Your data is saved in your own Supabase project. Each business only sees its own records.</p>
     <div class="grid g3 mb">${kpi('Documents', String(S.documents.length))}${kpi('Products', String(S.products.length))}${kpi('Costings', String(S.costings.length))}</div>
-    <button class="btn" onclick="resetConnection()">Change Supabase project</button></div></div>
+    ${fixedConnection() || !isOwner() ? '' : '<button class="btn" onclick="resetConnection()">Change Supabase project</button>'}</div></div>
   </div>`;
 };
 async function saveSettings(e) {
