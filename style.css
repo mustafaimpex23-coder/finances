@@ -356,3 +356,36 @@ fieldset:disabled input, fieldset:disabled select { background: var(--soft); col
   .main { padding: 0; }
   .card { border: 0; box-shadow: none; }
 }
+/* ===================== Quick Entry (notebook) ===================== */
+.kh-wrap { max-width: 980px; margin: 0 auto; }
+.kh-box { margin-bottom: 18px; border: 2px solid var(--primary-soft); }
+.kh-box textarea { width: 100%; font: 500 17px/1.5 var(--font); border: 0; outline: 0; resize: vertical; background: transparent; color: var(--text); padding: 4px 2px; min-height: 58px; }
+.kh-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
+.kh-row .btn { margin-left: auto; }
+.kh-chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.kh-chips button { border: 1px solid var(--line); background: var(--soft); color: var(--muted); border-radius: 999px; padding: 5px 11px; font: 500 12.5px var(--font); cursor: pointer; }
+.kh-chips button:hover { color: var(--primary); border-color: var(--primary); }
+.kh-feed { display: flex; flex-direction: column; }
+.kh-day { font: 700 11.5px var(--font); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
+.kh-line { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); margin-bottom: 6px; background: var(--card); }
+.kh-line .grow { min-width: 0; }
+.kh-line .grow b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kh-ic { width: 30px; height: 30px; flex: none; border-radius: 50%; display: grid; place-items: center; font-weight: 800; background: var(--soft); color: var(--muted); }
+.kh-line.in .kh-ic { background: var(--green-soft); color: var(--green); }
+.kh-line.out .kh-ic { background: var(--red-soft); color: var(--red); }
+.kh-amt { white-space: nowrap; }
+.kh-quote { margin: 0 0 14px; padding: 10px 14px; border-left: 3px solid var(--primary); background: var(--primary-soft); border-radius: 8px; font-weight: 600; }
+.kh-items { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; }
+.kh-items input { width: 70px; padding: 6px 8px; }
+.kh-f .field { margin: 0; }
+.kh-hint { margin: 12px 0 0; }
+@media (max-width: 700px) { .kh-box textarea { font-size: 16px; } .kh-chips { display: none; } .kh-row .btn { width: 100%; } }
+@media (max-width: 700px) { .kh-wrap .grid.g4 { grid-template-columns: 1fr 1fr; gap: 10px; } .kh-wrap .kpi { padding: 12px 14px; } .kh-wrap .kpi b { font-size: 18px; } }
+/* bank statement review */
+.bs-tbl td { vertical-align: middle; }
+.bs-tbl select { max-width: 240px; padding: 7px 8px; font-size: 13px; }
+.bs-tbl select.bs-need { border-color: var(--red); background: var(--red-soft); }
+.bs-tbl tr.muted td { opacity: .55; }
+.kh-row .btn:not(.primary) { margin-left: auto; }
+.kh-row .btn.primary { margin-left: 0; }
+@media (max-width: 700px) { .kh-row .btn:not(.primary) { width: 100%; } }
