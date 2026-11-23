@@ -254,6 +254,19 @@ const BIZ_TYPES = {
       ['5200', 'Customs Duty & Taxes', 'expense'], ['5210', 'Sea / Air Freight', 'expense'], ['5220', 'Clearing & Forwarding', 'expense'],
       ['5230', 'Marine Insurance', 'expense'], ['6800', 'Bank & LC Charges', 'expense']],
   },
+  retail_uk: {
+    label: 'UK Online Shop & Market Stall', icon: 'cart', currency: 'GBP',
+    desc: 'You sell online (Shopify, TikTok Shop) and at markets in the UK. Adds Shopify, TikTok and market sales, payout balances, postage, packaging, pitch rent, fees and VAT — plus order import and a VAT summary.',
+    accounts: [['1020', 'Shopify Payments Balance', 'asset', true], ['1030', 'TikTok Shop Balance', 'asset', true], ['1040', 'PayPal Balance', 'asset', true],
+      ['1050', 'Card Reader (SumUp) Balance', 'asset', true],
+      ['4010', 'Shopify Website Sales', 'income'], ['4020', 'TikTok Shop Sales', 'income'], ['4030', 'Market Stall Sales', 'income'],
+      ['4035', 'Other Online Sales', 'income'], ['4040', 'Delivery Charges Received', 'income'], ['4050', 'Refunds & Returns', 'income'],
+      ['5010', 'Ingredients & Raw Materials', 'expense'], ['5020', 'Jars, Bottles & Labels', 'expense'],
+      ['6110', 'Market Pitch & Stall Rent', 'expense'], ['6330', 'Postage & Couriers', 'expense'], ['6340', 'Packaging & Gift Boxes', 'expense'],
+      ['6510', 'Social Media & Influencers', 'expense'], ['6520', 'Photography & Content', 'expense'],
+      ['6830', 'Payment Processing Fees', 'expense'], ['6840', 'TikTok Shop & Marketplace Fees', 'expense'], ['6850', 'Shopify Plan & Apps', 'expense'],
+      ['6860', 'Website, Domain & Software', 'expense'], ['6870', 'Business Insurance', 'expense'], ['6880', 'Accountancy & Bookkeeping', 'expense'], ['6890', 'Bank Charges', 'expense']],
+  },
   investor: {
     label: 'Investor', icon: 'chart',
     desc: 'You invest money in shares, property or other businesses. Adds investment, loans given, dividend, rental, profit and brokerage accounts.',
@@ -264,6 +277,7 @@ const BIZ_TYPES = {
 };
 const bizType = () => S.business?.business_type || null;
 const showCosting = () => !bizType() || bizType() === 'manufacturer';
+const isShop = () => bizType() === 'retail_uk';
 
 function chooseBusinessType(first = false) {
   if (!isOwner()) return toast(OWNER_MSG, 'err');
@@ -274,13 +288,20 @@ function chooseBusinessType(first = false) {
     <div class="biz-grid">${Object.entries(BIZ_TYPES).map(([k, b]) => `
       <button type="button" class="biz ${k === cur ? 'on' : ''}" onclick="setBusinessType('${k}')">${ic(b.icon)}<b>${b.label}</b><span>${b.desc}</span></button>`).join('')}</div>`, { wide: true, noFocus: true });
 }
+async function addMissingAccounts(list) {
+  const have = new Set(S.accounts.map(a => a.name.toLowerCase()));
+  const add = list.filter(([, name]) => !have.has(name.toLowerCase())).map(([code, name, t, isBank]) => ({ code, name, type: t, is_bank: !!isBank }));
+  await insMany('accounts', add);
+  return add;
+}
 async function setBusinessType(type) {
   const B = BIZ_TYPES[type];
   try {
-    await q(sb.from('business').update({ business_type: type }).eq('user_id', user.id));
-    const have = new Set(S.accounts.map(a => a.name.toLowerCase()));
-    const add = B.accounts.filter(([, name]) => !have.has(name.toLowerCase())).map(([code, name, t]) => ({ code, name, type: t }));
-    await insMany('accounts', add);
+    const patch = { business_type: type, ...(B.currency ? { currency: B.currency } : {}) };
+    try { await q(sb.from('business').update(patch).eq('user_id', user.id)); }
+    catch (e) { throw new Error(/check|constraint/i.test(e.message) ? 'Your database needs one update: run supabase-uk.sql in Supabase → SQL Editor, then try again.' : e.message); }
+    const add = await addMissingAccounts(B.accounts);
+    if (type === 'retail_uk') { const t = S.accounts.find(a => a.sys === 'tax'); if (t && !/vat/i.test(t.name)) await upd('accounts', t.id, { name: 'VAT Payable (HMRC)' }); }
     closeModal();
     await reload();
     buildNav();
@@ -390,15 +411,16 @@ function contactBalance(c) {
 
 /* ===================== UI building blocks ===================== */
 const NAV = [
-  ['Overview', [['dashboard', 'Dashboard', 'home'], ['insights', 'Smart Insights', 'spark']]],
+  ['Overview', [['khata', 'Quick Entry', 'edit'], ['dashboard', 'Dashboard', 'home'], ['insights', 'Smart Insights', 'spark']]],
   ['Money', [['sales', 'Sales', 'receipt'], ['purchases', 'Purchases', 'cart'], ['payments', 'Payments', 'wallet'], ['expenses', 'Expenses', 'dollar'], ['banking', 'Bank & Cash', 'bank']]],
+  ['Shop', [['online', 'Online & Market', 'cart']]],
   ['Business', [['contacts', 'Customers & Suppliers', 'users'], ['inventory', 'Products & Stock', 'box'], ['hr', 'HR & Payroll', 'id'], ['crm', 'CRM & Follow-ups', 'target']]],
   ['Costing', [['pvc', 'PVC Costing', 'layers'], ['carton', 'Carton Costing', 'calc']]],
   ['Books', [['accounting', 'Accounting', 'book'], ['reports', 'Reports', 'chart'], ['settings', 'Settings', 'gear']]],
 ];
 const NAV_FLAT = NAV.flatMap(g => g[1]);
 function buildNav() {
-  $('#nav').innerHTML = NAV.filter(([g]) => g !== 'Costing' || showCosting())
+  $('#nav').innerHTML = NAV.filter(([g]) => (g !== 'Costing' || showCosting()) && (g !== 'Shop' || isShop()))
     .map(([g, items]) => `<h6>${g}</h6>` + items.map(([r, l, i]) => `<a href="#/${r}" data-r="${r}">${ic(i)}<span>${l}</span></a>`).join('')).join('');
   $('#bizName').textContent = S.business?.name || 'My Business';
   $('#roleTag').textContent = `${isOwner() ? 'Owner' : 'Accountant'}${bizType() ? ' · ' + BIZ_TYPES[bizType()].label : ''}`;
@@ -596,8 +618,8 @@ function toggleTheme() {
 const PAGES = {};
 const AFTER = {};
 function render() {
-  const route = (location.hash.replace('#/', '') || 'dashboard').split('?')[0];
-  const page = PAGES[route] ? route : 'dashboard';
+  const route = (location.hash.replace('#/', '') || (isShop() ? 'khata' : 'dashboard')).split('?')[0];
+  const page = PAGES[route] ? route : (isShop() ? 'khata' : 'dashboard');
   $$('.nav a').forEach(a => a.classList.toggle('active', a.dataset.r === page));
   $('#pageTitle').textContent = NAV_FLAT.find(n => n[0] === page)?.[1] || '';
   $('#bizName').textContent = S.business?.name || 'My Business';
@@ -621,6 +643,8 @@ function quickNew() {
     ['file', 'Quotation', "openDocForm('quotation')"], ['wallet', 'Pay Supplier', "openPaymentForm('out')"],
     ['users', 'Customer', "openContactForm('customer')"], ['box', 'Product', 'openProductForm()'],
     ['id', 'Employee', 'openEmployeeForm()'], ['target', 'Follow-up / Lead', 'openLeadForm()'],
+    ['file', 'Upload bank statement', 'openBankImport()'],
+    ...(isShop() ? [['cart', 'Import Shopify / TikTok orders', 'openImport()'], ['wallet', 'Record market day', 'openMarketDay()'], ['bank', 'Record payout', 'openPayoutForm()']] : []),
     ...(showCosting() ? [['layers', 'PVC Costing', "openCostingForm('pvc')"], ['calc', 'Carton Costing', "openCostingForm('carton')"]] : []),
   ];
   openModal('What do you want to add?', `<div class="qa-grid">${items.map(([i, l, fn]) => `<button type="button" class="btn" onclick="closeModal();${fn}">${ic(i)} ${l}</button>`).join('')}</div>`, { noFocus: true });
@@ -961,6 +985,12 @@ async function postInvoice(d) {
   });
 }
 
+function billOtherAcc(d) {
+  // non-stock lines can carry their own expense category (set by Quick Entry); otherwise General Expenses
+  const other = (d.items || []).filter(i => !i.product_id);
+  const a = other[0]?.account_id;
+  return a && other.every(i => i.account_id === a) && byId('accounts', a) ? a : acc('general');
+}
 async function postBill(d, isNew) {
   const wh = d.warehouse_id || mainWh()?.id;
   const net = Math.max(0, +d.subtotal - +d.discount);
@@ -987,7 +1017,7 @@ async function postBill(d, isNew) {
   await postJournal({
     date: d.date, memo: `Purchase bill ${d.number}`, ref_type: 'bill', ref_id: d.id, lines: [
       { account_id: acc('inventory'), debit: invR },
-      { account_id: acc('general'), debit: r2(+d.total - +d.tax - invR) },
+      { account_id: billOtherAcc(d), debit: r2(+d.total - +d.tax - invR) },
       { account_id: acc('tax'), debit: d.tax },
       { account_id: acc('ap'), credit: d.total },
     ],
@@ -1497,6 +1527,7 @@ PAGES.banking = () => {
       ], lines.reverse(), { empty: 'No transactions in this account yet.' })}</div>`;
   }
   return `<div class="toolbar"><span class="muted">Total cash & bank: <b>${money(cashBalance())}</b></span><span class="grow"></span>
+    <button class="btn" onclick="openBankImport()">${ic('file')} Upload statement (CSV)</button>
     <button class="btn" onclick="openTransferForm()">${ic('swap')} Transfer money</button>
     <button class="btn primary" onclick="openBankForm()">${ic('plus')} Add Account</button></div>
   <div class="grid g4 mb">${list.map(a => `<div class="card acc-card ${a.id === UI.bankAcc ? 'on' : ''}" onclick="selectBank('${a.id}')"><span>${esc(a.name)}</span><b>${money(natural(a, s.get(a.id)))}</b></div>`).join('')}</div>
@@ -1831,9 +1862,977 @@ async function deleteEntry(id) {
   const e = byId('journal_entries', id);
   try {
     checkLock(e.date);
-    if (!confirm('Delete this journal entry?')) return;
-    await del('journal_entries', id); await refresh(); toast('Deleted');
+    if (!confirm(e.ref_id ? 'Delete this entry (and its stock movements)?' : 'Delete this journal entry?')) return;
+    if (e.ref_id) await unpost(e.ref_id); else await del('journal_entries', id);
+    await refresh(); toast('Deleted');
   } catch (err) { toast(err.message, 'err'); }
+}
+
+/* ===================== Quick Entry (notebook-style "khata") =====================
+   Type plain sentences like "sold 3 vanilla shea butter £75 cash" or "bought 200 jars from Ali £180 on credit".
+   The app works out what it is, shows a check card, and posts it to the right place:
+   cash sales, credit sales (customer ledger), purchases (supplier ledger), payments, expenses, capital, payouts.
+   ================================================================================ */
+const KH = { pending: null };
+const KH_STOP = new Set(['shea', 'luv', 'pure', 'the', 'and', 'with', 'for', 'from', 'set', 'of', 'a', 'x']);
+const KH_NOT_NAME = new Set(['bank', 'cash', 'card', 'me', 'us', 'business', 'the', 'a', 'an', 'shopify', 'tiktok', 'paypal', 'sumup', 'market',
+  'stall', 'customer', 'customers', 'today', 'yesterday', 'credit', 'account', 'stock', 'myself', 'personal', 'royal', 'mail', 'evri', 'it', 'him', 'her', 'them',
+  'online', 'website', 'walk', 'walk-in', 'shop', 'home', 'supplier']);
+const KH_EXP = [
+  [/royal mail|evri|hermes|dpd|parcelforce|courier|postage|post office|shipping label|stamps?\b/, 'Postage & Couriers', 'Transport & Freight'],
+  [/pitch|stall (fee|rent)|market (fee|rent)|apple market/, 'Market Pitch & Stall Rent', 'Rent'],
+  [/gift box|packaging|bags?\b|tissue|ribbon|boxes\b|mailers?\b|bubble wrap/, 'Packaging & Gift Boxes', 'General Expenses'],
+  [/jars?\b|bottles?\b|labels?\b|lids?\b|pumps?\b|droppers?\b|tins?\b|containers?\b/, 'Jars, Bottles & Labels', 'General Expenses'],
+  [/raw shea|shea nuts?|unrefined|ingredients?|cocoa butter|carrier oil|essential oils?|fragrance|beeswax|raw material/, 'Ingredients & Raw Materials', 'General Expenses'],
+  [/facebook ads?|instagram ads?|tiktok ads?|ads?\b|advert|influencer|promo(tion)?|marketing|boost/, 'Social Media & Influencers', 'Marketing'],
+  [/photo(grapher|s|graphy)?|video(grapher)?|content|filming/, 'Photography & Content', 'Marketing'],
+  [/shopify (plan|app|subscription|bill)|app subscription/, 'Shopify Plan & Apps', 'Office Expenses'],
+  [/domain|website|hosting|software|canva|subscription/, 'Website, Domain & Software', 'Office Expenses'],
+  [/insurance/, 'Business Insurance', 'General Expenses'],
+  [/accountant|bookkeep|accountancy/, 'Accountancy & Bookkeeping', 'General Expenses'],
+  [/tiktok (fee|fees|commission)|marketplace fee/, 'TikTok Shop & Marketplace Fees', 'General Expenses'],
+  [/(card|sumup|paypal|stripe|shopify payments?) (fee|fees)|processing fee|transaction fee/, 'Payment Processing Fees', 'General Expenses'],
+  [/electric|electricity|gas bill|water bill|utilit/, 'Electricity, Gas & Water', 'Electricity, Gas & Water'],
+  [/\brent\b|storage unit|lock ?up/, 'Rent', 'Rent'],
+  [/uber|taxi|train|tube|bus\b|petrol|diesel|fuel|parking|congestion|tfl|oyster|van hire|travel|transport/, 'Transport & Freight', 'Transport & Freight'],
+  [/wages?|salary|salaries|helper|staff|assistant/, 'Salaries & Wages', 'Salaries & Wages'],
+  [/stationery|printing|printer|ink|office|phone bill|mobile bill|internet/, 'Office Expenses', 'Office Expenses'],
+];
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+function accNamed(...names) {
+  for (const n of names) { const a = S.accounts.find(x => x.name.toLowerCase() === String(n).toLowerCase()); if (a) return a; }
+  return null;
+}
+const sysAcc = k => S.accounts.find(a => a.sys === k);
+const generalAcc = () => sysAcc('general') || S.accounts.find(a => a.type === 'expense');
+function payAccounts() {
+  const cash = sysAcc('cash') || banks()[0];
+  const bank = sysAcc('bank') || banks().find(a => a.id !== cash?.id) || cash;
+  const card = accNamed('Card Reader (SumUp) Balance') || bank;
+  const paypal = accNamed('PayPal Balance') || bank;
+  return { cash, bank, card, paypal };
+}
+const KH_METHODS = [['cash', 'Cash'], ['card', 'Card'], ['bank', 'Bank'], ['paypal', 'PayPal'], ['credit', 'On credit (pay later)']];
+
+function khDate(t) {
+  if (/\byesterday\b/.test(t)) return addDays(today(), -1);
+  let m = t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (m) { const y = m[3] ? (m[3].length === 2 ? '20' + m[3] : m[3]) : today().slice(0, 4); return `${y}-${String(+m[2]).padStart(2, '0')}-${String(+m[1]).padStart(2, '0')}`; }
+  m = t.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/) || t.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b(?!\s*(?:\.\d|ml|g\b|x\b|pcs|jars|bottles))/);
+  if (m) { const [d, mo] = /\d/.test(m[1]) ? [m[1], m[2]] : [m[2], m[1]]; return `${today().slice(0, 4)}-${String(MONTHS.indexOf(mo.slice(0, 3)) + 1).padStart(2, '0')}-${String(+d).padStart(2, '0')}`; }
+  return today();
+}
+function khMoney(t) {
+  let m = t.match(/£\s*(\d+(?:[.,]\d{1,2})?)/) || t.match(/(\d+(?:\.\d{1,2})?)\s*(?:pounds?|gbp|quid)\b/);
+  if (m) return num(m[1].replace(',', '.'));
+  // otherwise: the last number that is not a quantity, a size or a date
+  const clean = t.replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, ' ')
+    .replace(/\b\d+(\.\d+)?\s*(ml|g|kg|l|oz|pcs?|x|jars?|bottles?|tins?|units?|boxes|bags|labels|lids|pumps|packs?|items?|of)\b/g, ' ')
+    .replace(/\b(fees?|commission)\s*£?\s*\d+(\.\d+)?/g, ' ');
+  const nums = [...clean.matchAll(/(?:^|[^\w.])(\d+(?:\.\d{1,2})?)(?![\w.])/g)].map(x => num(x[1]));
+  return nums.length ? nums[nums.length - 1] : 0;
+}
+function khMethod(t, type) {
+  if (/\b(on credit|credit|owe|owes|owed|unpaid|pay later|on account|to pay later|invoice)\b/.test(t)) return 'credit';
+  if (/\bpaypal\b/.test(t)) return 'paypal';
+  if (/\b(card|sumup|contactless|debit card|apple pay)\b/.test(t)) return 'card';
+  if (/\b(bank|transfer|bacs|online banking|direct debit)\b/.test(t)) return 'bank';
+  if (/\bcash\b/.test(t)) return 'cash';
+  if (type === 'purchase') return 'unknown';
+  return 'cash';
+}
+function khWords(s) { return String(s).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 2 && !KH_STOP.has(w)); }
+function khProduct(seg) {
+  const words = new Set(khWords(seg));
+  let best = null, bs = 0;
+  for (const p of S.products) {
+    const pw = khWords(p.name).concat(p.sku ? [String(p.sku).toLowerCase()] : []);
+    if (!pw.length) continue;
+    const hit = pw.filter(w => words.has(w) || (w.length > 4 && [...words].some(x => x.length > 3 && (x.startsWith(w.slice(0, 5)) || w.startsWith(x.slice(0, 5))))));
+    const score = hit.length / pw.length + hit.length * 0.01;
+    if (hit.length && score > bs) { bs = score; best = p; }
+  }
+  return bs >= 0.34 ? best : null;
+}
+function khItems(t) {
+  const body = t.replace(/£\s*\d+([.,]\d+)?|\b\d+(\.\d+)?\s*(pounds?|gbp|quid)\b|\b\d+\.\d+\b/g, ' ')
+    .replace(/\b(from|to|for)\s+[a-z][\w'&.-]*(\s+[a-z][\w'&.-]*)?\s*$/, '');
+  const segs = body.split(/,|\band\b|&|\+|\bplus\b/);
+  const items = [];
+  for (const seg of segs) {
+    const p = khProduct(seg);
+    const qm = seg.match(/\b(\d+)\s*(?:x\s*)?(?=[a-z])(?!(?:for|from|to|on|by|at|cash|card|bank|each)\b)/) || seg.match(/\bx\s*(\d+)\b/);
+    const qty = qm && !/^\d+(\s*)(ml|g|kg|l|oz)\b/.test(seg.slice(seg.indexOf(qm[1]))) ? +qm[1] : 1;
+    if (p) items.push({ product_id: p.id, description: p.name, qty, price: +p.price || 0 });
+  }
+  return items;
+}
+function khName(raw, t) {
+  const pats = [/\b(?:from|to|for|paid|pay|by)\s+([A-Za-z][\w'&.-]*(?:\s+[A-Z][\w'&.-]*){0,2})/g, /^([A-Z][\w'&.-]+(?:\s+[A-Z][\w'&.-]+)?)\s+(?:paid|sent|bought|owes)\b/g];
+  for (const re of pats) {
+    for (const m of raw.matchAll(re)) {
+      const cand = m[1].trim().replace(/[.,]$/, '');
+      const first = cand.split(/\s+/)[0].toLowerCase();
+      if (KH_NOT_NAME.has(first) || /^\d/.test(first) || khExpense(first)) continue;
+      if (S.products.some(p => khWords(p.name).includes(first))) continue;
+      // keep only capitalised follow-on words (names), drop trailing lowercase words
+      const parts = cand.split(/\s+/); const keep = [parts[0]];
+      for (const w of parts.slice(1)) { if (/^[A-Z]/.test(w) && !KH_NOT_NAME.has(w.toLowerCase())) keep.push(w); else break; }
+      return keep.join(' ').replace(/^./, c => c.toUpperCase());
+    }
+  }
+  return '';
+}
+function khExpense(t) {
+  for (const [re, shopName, fallback] of KH_EXP) if (re.test(t)) return accNamed(shopName, fallback) || generalAcc();
+  return null;
+}
+function khContact(name, type) {
+  if (!name) return null;
+  const n = name.toLowerCase();
+  const list = S.contacts.filter(c => !type || c.type === type);
+  return list.find(c => c.name.toLowerCase() === n) || list.find(c => c.name.toLowerCase().startsWith(n)) || list.find(c => n.startsWith(c.name.toLowerCase())) || null;
+}
+
+function parseKhata(raw) {
+  const t = ' ' + raw.toLowerCase().replace(/\s+/g, ' ').trim() + ' ';
+  const r = { raw: raw.trim(), date: khDate(t), amount: khMoney(t), items: [], name: khName(raw, t), method: 'cash', type: 'unknown', account_id: null, fees: 0 };
+  const fm = t.match(/\b(?:fees?|commission)\s*(?:of\s*)?£?\s*(\d+(?:\.\d{1,2})?)/);
+  if (/\b(payout|paid out|paid me out|paid into (my )?bank|settlement)\b/.test(t) && /\b(shopify|tiktok|paypal|sumup)\b/.test(t)) {
+    r.type = 'payout'; r.fees = fm ? num(fm[1]) : 0;
+    r.source = /tiktok/.test(t) ? 'TikTok Shop Balance' : /paypal/.test(t) ? 'PayPal Balance' : /sumup|card reader/.test(t) ? 'Card Reader (SumUp) Balance' : 'Shopify Payments Balance';
+  } else if (/\b(invested|invest|put|added|capital|loan from me)\b/.test(t) && /\b(business|capital|own money|my money|myself|company)\b/.test(t) && !/\b(took|withdrew)\b/.test(t)) {
+    r.type = 'capital';
+  } else if (/\b(took out|withdrew|withdrawal|drawings|for myself|personal use|took £?\d)/.test(t)) {
+    r.type = 'drawings';
+  } else if (/\b(received|got paid|collected|recd|got £?\d)/.test(t) || /^ ?[a-z][\w'-]* (paid|sent) (me|us|£?\d)/.test(t)) {
+    r.type = 'receive';
+  } else if (/\b(sold|sale|sales|sell|selling|takings|took in)\b/.test(t) || (/\bowes?\b/.test(t) && r.name)) {
+    r.type = 'sale';
+    r.channel = /\b(shopify|website|online order)\b/.test(t) ? 'shopify' : /\btiktok\b/.test(t) ? 'tiktok' : 'stall';
+  } else if (/\b(bought|buy|purchased|purchase|restock|restocked|stock from|ordered)\b/.test(t)) {
+    r.type = 'purchase';
+  } else if (/\b(paid|pay|paying|spent|spend|cost|bill|fee|fees)\b/.test(t) || khExpense(t)) {
+    const exp = khExpense(t);
+    const sup = khContact(r.name, 'supplier');
+    r.type = sup || (!exp && r.name) ? 'pay' : 'expense';
+    if (r.type === 'expense') r.account_id = (exp || generalAcc())?.id;
+  }
+  r.method = khMethod(t, r.type);
+  if (r.type === 'sale' || r.type === 'purchase') r.items = khItems(t);
+  if (r.type === 'purchase') {
+    r.account_id = (khExpense(t) || generalAcc())?.id;
+    if (r.method === 'unknown') r.method = r.name ? 'credit' : 'cash';
+    if (!r.items.length) {
+      const qm = t.match(/\b(\d+)\s*(?:x\s*)?([a-z][a-z ]{2,30}?)(?= from| for| at| on| £| \d|,| $)/);
+      r.desc = qm && !/^(cash|card|bank|paypal|pounds?|gbp|quid|on|by)\b/.test(qm[2]) ? `${qm[1]} ${qm[2].trim()}`
+        : raw.replace(/£\s*\d+(\.\d+)?|\b\d+(\.\d+)?\b/g, ' ').replace(/\b(bought|buy|purchased|purchase|restocked|restock|ordered|from|to|on credit|credit|cash|card|bank|paypal|by|with|pounds?|today|yesterday)\b/gi, ' ')
+          .replace(new RegExp('\\b' + (r.name || '@@') + '\\b', 'i'), ' ').replace(/\s+/g, ' ').trim();
+    }
+  }
+  if (r.type === 'sale' && !r.amount && r.items.length) r.amount = r2(sum(r.items, i => i.qty * i.price));
+  if (['receive', 'pay'].includes(r.type) && r.method === 'credit') r.method = 'cash';
+  return r;
+}
+
+/* ---------- page ---------- */
+const KH_TYPES = [['sale', 'Sale'], ['purchase', 'Purchase (stock / supplies)'], ['expense', 'Expense'], ['pay', 'Paid a supplier'], ['receive', 'Money received from a customer'],
+  ['payout', 'Payout to bank (Shopify / TikTok / PayPal)'], ['capital', 'Owner put money in'], ['drawings', 'Owner took money out']];
+const KH_EXAMPLES = ['sold 3 vanilla shea butter £75 cash', 'sold 2 lemongrass oil by card £40', 'bought 200 jars from Ali £180 on credit',
+  'paid Ali £100 bank', 'royal mail postage £14.60 card', 'pitch rent £45 cash', 'Sarah owes £60 for 2 gift sets', 'received £60 from Sarah',
+  'shopify payout £230 fees £7.10', 'took £100 for myself'];
+PAGES.khata = () => {
+  const t = today();
+  const s = sums(t, t);
+  const inc = sum(S.accounts.filter(a => a.type === 'income'), a => natural(a, s.get(a.id)));
+  const exp = sum(S.accounts.filter(a => a.type === 'expense' && a.sys !== 'cogs'), a => natural(a, s.get(a.id)));
+  const P = payAccounts(), all = sums(null, null);
+  const recent = S.journal_entries.slice().sort((a, b) => b.date.localeCompare(a.date) || String(b.created_at).localeCompare(String(a.created_at))).slice(0, 40);
+  const amt = e => sum(S.journal_lines.filter(l => l.entry_id === e.id && sysAcc('cogs')?.id !== l.account_id && sysAcc('inventory')?.id !== l.account_id), l => l.debit)
+    || sum(S.journal_lines.filter(l => l.entry_id === e.id), l => l.debit);
+  const kind = e => /^(Sale|Invoice|Market day|Shopify order|TikTok Shop order|Other online order)/.test(e.memo || '') ? 'in'
+    : /^(Received from|Owner put)/.test(e.memo || '') ? 'in' : /^(Expense|Paid to|Purchase|Owner took)/.test(e.memo || '') ? 'out' : '';
+  const label = e => {
+    const d = ['invoice', 'bill'].includes(e.ref_type) ? byId('documents', e.ref_id) : null;
+    if (!d) return e.memo || '';
+    const who = byId('contacts', d.contact_id)?.name || '';
+    const what = (d.items || []).map(i => `${i.qty}× ${i.description || byId('products', i.product_id)?.name || ''}`).join(', ');
+    const paid = paidOf(d.id) >= +d.total - 0.009;
+    return d.kind === 'invoice' ? `Sold to ${who}: ${what}${paid ? '' : ' (on credit)'}` : `Bought${who && who !== 'Cash purchases' ? ' from ' + who : ''}: ${what}${paid ? '' : ' (on credit)'}`;
+  };
+  const shown = recent.filter(e => !(e.ref_type === 'payment' && /^Paid to Cash purchases$/.test(e.memo || '')));
+  let lastDay = '';
+  return `<div class="kh-wrap">
+    <div class="card kh-box">
+      <form onsubmit="event.preventDefault();khSubmit()">
+        <textarea id="khText" rows="2" placeholder="Write what happened, e.g. “sold 3 shea butter £75 cash” or “bought 200 jars from Ali £180 on credit”" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();khSubmit()}"></textarea>
+        <div class="kh-row"><div class="kh-chips">${KH_EXAMPLES.slice(0, 6).map(x => `<button type="button" onclick="khUse(this)">${esc(x)}</button>`).join('')}</div>
+        <button class="btn" type="button" onclick="openBankImport()">${ic('bank')} Upload bank statement</button>
+        <button class="btn primary" type="submit">${ic('plus')} Add</button></div>
+      </form>
+    </div>
+    <div class="grid g4 mb">
+      ${kpi('Sales today', money0(inc))}
+      ${kpi('Spent today', money0(exp))}
+      ${kpi('Cash in hand', money0(P.cash ? natural(P.cash, all.get(P.cash.id)) : 0))}
+      ${kpi('Bank', money0(P.bank && P.bank.id !== P.cash?.id ? natural(P.bank, all.get(P.bank.id)) : 0))}
+    </div>
+    <div class="card"><div class="card-head"><h3>Your notebook</h3><span class="grow"></span><span class="muted small">Every line is saved in the right ledger automatically</span></div>
+      ${shown.length ? `<div class="kh-feed">${shown.map(e => {
+        const day = e.date !== lastDay ? `<div class="kh-day">${e.date === t ? 'Today' : e.date === addDays(t, -1) ? 'Yesterday' : fmtDate(e.date)}</div>` : '';
+        lastDay = e.date;
+        const bankMove = /^Bank: /.test(e.memo || '') ? sum(S.journal_lines.filter(l => l.entry_id === e.id && byId('accounts', l.account_id)?.is_bank), l => +l.debit - +l.credit) : 0;
+        const k = e.ref_type === 'invoice' ? 'in' : e.ref_type === 'bill' ? 'out' : bankMove > 0.009 ? 'in' : bankMove < -0.009 ? 'out' : kind(e);
+        return `${day}<div class="kh-line ${k}"><span class="kh-ic">${k === 'in' ? '＋' : k === 'out' ? '−' : '•'}</span><div class="grow"><b>${esc(label(e))}</b><div class="muted small">${esc(S.journal_lines.filter(l => l.entry_id === e.id).map(l => byId('accounts', l.account_id)?.name).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · '))}</div></div><b class="kh-amt">${fmtN(amt(e))}</b></div>`;
+      }).join('')}</div>` : '<div class="empty">Nothing written yet. Type your first entry above — like writing in your notebook.</div>'}
+    </div></div>`;
+};
+AFTER.khata = () => { const el = $('#khText'); if (el && matchMedia('(min-width: 900px)').matches) el.focus(); };
+function khUse(b) { const el = $('#khText'); el.value = b.textContent; el.focus(); }
+function khSubmit() {
+  const text = $('#khText')?.value.trim();
+  if (!text) return;
+  KH.pending = parseKhata(text);
+  khConfirm();
+}
+
+/* ---------- check card ---------- */
+function khConfirm() {
+  const r = KH.pending;
+  const expOpts = S.accounts.filter(a => a.type === 'expense' && a.sys !== 'cogs').sort(byName).map(a => [a.id, a.name]);
+  const people = S.contacts.slice().sort(byName);
+  const itemsHTML = r.items.length ? `<div class="kh-items">${r.items.map((i, n) => `<div><input type="number" min="0" step="1" value="${i.qty}" data-n="${n}" class="kh-q"> × <b>${esc(i.description)}</b> <span class="muted small">(${money(i.price)} each)</span></div>`).join('')}</div>` : '';
+  const unknown = r.type === 'unknown';
+  openModal(unknown ? 'What kind of entry is this?' : 'Check and save', `
+    <p class="kh-quote">“${esc(r.raw)}”</p>
+    <div class="form-grid">
+      ${fieldHTML({ k: 'type', label: 'What happened', type: 'select', placeholder: unknown ? 'Choose…' : false, required: true, options: KH_TYPES, full: true }, unknown ? '' : r.type)}
+      ${fieldHTML({ k: 'amount', label: 'Amount (£)', type: 'number', required: true, min: 0 }, r.amount || '')}
+      ${fieldHTML({ k: 'date', label: 'Date', type: 'date', required: true }, r.date)}
+      <label class="field kh-f kh-who"><span>Who (customer / supplier)</span><input name="who" list="khPeople" value="${esc(r.name)}" placeholder="Leave empty for a walk-in customer"><datalist id="khPeople">${people.map(c => `<option value="${esc(c.name)}">${c.type === 'customer' ? 'Customer' : 'Supplier'}</option>`).join('')}</datalist></label>
+      <div class="kh-f kh-method">${fieldHTML({ k: 'method', label: 'Paid with', type: 'select', placeholder: false, options: KH_METHODS }, r.method)}</div>
+      <div class="kh-f kh-cat">${fieldHTML({ k: 'account_id', label: 'Category', type: 'select', placeholder: false, options: expOpts }, r.account_id)}</div>
+      <div class="kh-f kh-desc">${fieldHTML({ k: 'desc', label: 'What was bought', ph: 'e.g. 200 jars' }, r.desc || '')}</div>
+      <div class="kh-f kh-fees">${fieldHTML({ k: 'fees', label: 'Fees taken off (£)', type: 'number', min: 0 }, r.fees || '')}</div>
+      <div class="kh-f kh-src">${fieldHTML({ k: 'source', label: 'Payout from', type: 'select', placeholder: false, options: ['Shopify Payments Balance', 'TikTok Shop Balance', 'PayPal Balance', 'Card Reader (SumUp) Balance'].filter(n => accNamed(n)).map(n => [n, n]) }, r.source)}</div>
+      <div class="kh-f kh-chan">${fieldHTML({ k: 'channel', label: 'Sold where', type: 'select', placeholder: false, options: [['stall', 'Market stall / in person'], ['shopify', 'Website (Shopify)'], ['tiktok', 'TikTok Shop']] }, r.channel || 'stall')}</div>
+    </div>
+    <div class="kh-f kh-its">${itemsHTML}</div>
+    <p class="muted small kh-hint" id="khHint"></p>`, {
+    submit: 'Save entry', after: f => { f.elements.type.onchange = () => khToggle(f); f.elements.method.onchange = () => khToggle(f); khToggle(f); },
+    onSubmit: f => khSave(f),
+  });
+}
+function khToggle(f) {
+  const t = f.elements.type.value, m = f.elements.method.value;
+  const show = { 'kh-who': ['sale', 'purchase', 'pay', 'receive', 'expense'], 'kh-method': ['sale', 'purchase', 'expense', 'pay', 'receive', 'capital', 'drawings', 'payout'],
+    'kh-cat': ['expense', 'purchase'], 'kh-desc': ['purchase'], 'kh-fees': ['payout'], 'kh-src': ['payout'], 'kh-chan': ['sale'], 'kh-its': ['sale', 'purchase'] };
+  Object.entries(show).forEach(([c, ts]) => $$('.' + c, f).forEach(el => { el.style.display = ts.includes(t) ? '' : 'none'; }));
+  if (t === 'purchase') $('.kh-cat span', f).textContent = 'Category (if not stock)';
+  else if ($('.kh-cat span', f)) $('.kh-cat span', f).textContent = 'Category';
+  const lbl = $('.kh-method span', f);
+  if (lbl) lbl.textContent = t === 'payout' ? 'Paid into' : t === 'receive' ? 'Received as' : t === 'capital' ? 'Put into' : t === 'drawings' ? 'Taken from' : 'Paid with';
+  const who = f.elements.who.value.trim();
+  const hints = {
+    sale: m === 'credit' ? `Goes on ${who || 'the customer'}'s account (they owe you). Stock goes down.` : `Cash/card sale${who ? ' to ' + who : ' (walk-in customer)'}. Stock goes down.`,
+    purchase: m === 'credit' ? `Added to ${who || 'the supplier'}'s account — you owe them.` : `Paid now${who ? ' to ' + who : ''}. Shown in the supplier's ledger as bought and paid.`,
+    expense: 'Saved as an expense in the chosen category.', pay: `Reduces what you owe ${who || 'the supplier'}.`, receive: `Reduces what ${who || 'the customer'} owes you.`,
+    payout: 'Moves money from Shopify / TikTok / PayPal to your bank. Fees go to expenses.', capital: 'Recorded as owner’s money put into the business.', drawings: 'Recorded as owner’s money taken out of the business.',
+  };
+  $('#khHint').textContent = hints[t] || '';
+}
+async function khPerson(name, type) {
+  const n = String(name || '').trim();
+  if (!n) return null;
+  const c = khContact(n, type) || (khContact(n) && khContact(n).type === type ? khContact(n) : null);
+  if (c) return c;
+  const nc = await ins('contacts', { type, name: n, opening_balance: 0 });
+  S.contacts.push(nc);
+  return nc;
+}
+async function khSave(f) {
+  const r = KH.pending, E = f.elements;
+  const type = E.type.value, amount = r2(num(E.amount.value)), date = E.date.value, method = E.method.value, who = E.who.value.trim();
+  if (!type) throw new Error('Choose what happened');
+  if (amount <= 0) throw new Error('Enter the amount');
+  checkLock(date);
+  const P = payAccounts();
+  const payAcc = { cash: P.cash, card: P.card, bank: P.bank, paypal: P.paypal }[method] || P.cash;
+  if (!payAcc) throw new Error('Add a cash or bank account first (Bank & Cash).');
+  $$('.kh-q', f).forEach(i => { r.items[+i.dataset.n].qty = num(i.value); });
+  const items = r.items.filter(i => i.qty > 0);
+  const wh = mainWh()?.id;
+  const note = r.raw;
+
+  if (type === 'sale') {
+    const lines = items.length ? (() => { const base = sum(items, i => i.qty * i.price); const k = base ? amount / base : 0; return items.map(i => ({ ...i, price: r2(base ? i.price * k : amount / items.length / i.qty) })); })()
+      : [{ product_id: null, description: 'Sale', qty: 1, price: amount }];
+    const fix = r2(amount - sum(lines, i => i.qty * i.price)); if (Math.abs(fix) > 0 && lines.length) lines[0].price = r2(lines[0].price + fix / lines[0].qty);
+    const chan = E.channel.value;
+    const salesAcc = (chan === 'shopify' ? accNamed('Shopify Website Sales') : chan === 'tiktok' ? accNamed('TikTok Shop Sales') : accNamed('Market Stall Sales')) || sysAcc('sales');
+    if (who || method === 'credit') {
+      if (!who) throw new Error('Write the customer’s name for a credit sale');
+      const c = await khPerson(who, 'customer');
+      const subtotal = r2(sum(lines, i => i.qty * i.price));
+      const doc = await ins('documents', { kind: 'invoice', number: nextNumber('invoice'), contact_id: c.id, date, due_date: method === 'credit' ? addDays(date, 14) : date,
+        warehouse_id: wh, items: lines, subtotal, discount: 0, tax_rate: 0, tax: 0, landed: 0, total: subtotal, notes: note, status: null });
+      await postInvoice(doc);
+      if (salesAcc && salesAcc.id !== sysAcc('sales')?.id) await khMoveSales(doc.id, salesAcc.id);
+      if (method !== 'credit') await khPayment('in', c, doc.id, payAcc, amount, date, method);
+    } else {
+      const ref = uuid(); let cogs = 0; const moves = [];
+      items.forEach(i => { const p = byId('products', i.product_id); cogs += i.qty * (+p?.cost || 0); moves.push({ product_id: i.product_id, warehouse_id: wh, qty: -i.qty, date, ref_type: 'invoice', ref_id: ref, note: 'Walk-in sale' }); });
+      await postJournal({ date, memo: `Sale: ${items.length ? items.map(i => `${i.qty}× ${i.description}`).join(', ') : 'walk-in customer'} (${method})`, ref_type: 'journal', ref_id: ref, lines: [
+        { account_id: payAcc.id, debit: amount }, { account_id: salesAcc.id, credit: amount },
+        { account_id: acc('cogs'), debit: r2(cogs) }, { account_id: acc('inventory'), credit: r2(cogs) }] });
+      if (moves.length) await insMany('stock_moves', moves);
+    }
+  } else if (type === 'purchase') {
+    const c = await khPerson(who || 'Cash purchases', 'supplier');
+    const desc = E.desc.value.trim() || 'Purchase';
+    let lines;
+    if (items.length) {
+      const base = sum(items, i => i.qty * (+byId('products', i.product_id)?.cost || 0));
+      lines = items.map(i => ({ product_id: i.product_id, description: i.description, qty: i.qty, price: r2(base ? (+byId('products', i.product_id)?.cost || 0) * amount / base : amount / sum(items, x => x.qty)) }));
+      const fix = r2(amount - sum(lines, i => i.qty * i.price)); if (fix) lines[0].price = r2(lines[0].price + fix / lines[0].qty);
+    } else {
+      const qm = desc.match(/^(\d+)\s+(.+)$/);
+      lines = [{ product_id: null, description: desc, qty: 1, price: amount, account_id: E.account_id.value, ...(qm ? { description: `${qm[1]} ${qm[2]}` } : {}) }];
+    }
+    const subtotal = r2(sum(lines, i => i.qty * i.price));
+    const doc = await ins('documents', { kind: 'bill', number: nextNumber('bill'), contact_id: c.id, date, due_date: method === 'credit' ? addDays(date, 30) : date,
+      warehouse_id: wh, items: lines, subtotal, discount: 0, tax_rate: 0, tax: 0, landed: 0, total: subtotal, notes: note, status: null });
+    await postBill(doc, true);
+    if (method !== 'credit') await khPayment('out', c, doc.id, payAcc, amount, date, method);
+  } else if (type === 'expense') {
+    const row = await ins('expenses', { account_id: E.account_id.value, amount, date, paid_from: payAcc.id, payee: who || null, note });
+    await postJournal({ date, memo: `Expense: ${byId('accounts', row.account_id)?.name || ''}${who ? ' — ' + who : ''}`, ref_type: 'expense', ref_id: row.id,
+      lines: [{ account_id: row.account_id, debit: amount }, { account_id: payAcc.id, credit: amount }] });
+  } else if (type === 'pay' || type === 'receive') {
+    if (!who) throw new Error(`Write who you ${type === 'pay' ? 'paid' : 'received money from'}`);
+    const c = await khPerson(who, type === 'pay' ? 'supplier' : 'customer');
+    const open = S.documents.filter(d => d.contact_id === c.id && d.kind === (type === 'pay' ? 'bill' : 'invoice') && balOf(d) > 0.009).sort((a, b) => a.date.localeCompare(b.date))[0];
+    await khPayment(type === 'pay' ? 'out' : 'in', c, open?.id || null, payAcc, amount, date, method);
+  } else if (type === 'payout') {
+    const src = accNamed(E.source.value);
+    if (!src) throw new Error('Choose where the payout came from');
+    const fees = r2(num(E.fees.value));
+    const feeAcc = accNamed(/tiktok/i.test(src.name) ? 'TikTok Shop & Marketplace Fees' : 'Payment Processing Fees') || generalAcc();
+    const to = method === 'cash' ? P.bank : payAcc;
+    await postJournal({ date, memo: `Payout ${src.name} → ${to.name}`, ref_type: 'journal', ref_id: uuid(), lines: [
+      { account_id: to.id, debit: amount }, { account_id: feeAcc.id, debit: fees }, { account_id: src.id, credit: r2(amount + fees) }] });
+  } else if (type === 'capital' || type === 'drawings') {
+    const cap = sysAcc('capital');
+    await postJournal({ date, memo: type === 'capital' ? `Owner put money in (${payAcc.name})` : `Owner took money out (${payAcc.name})`, ref_type: 'journal', ref_id: uuid(),
+      lines: type === 'capital' ? [{ account_id: payAcc.id, debit: amount }, { account_id: cap.id, credit: amount }] : [{ account_id: cap.id, debit: amount }, { account_id: payAcc.id, credit: amount }] });
+  }
+  await refresh();
+  const box = $('#khText'); if (box) box.value = '';
+  toast('Saved ✓');
+}
+async function khPayment(direction, c, docId, account, amount, date, method) {
+  const methodName = { cash: 'Cash', card: 'Card', bank: 'Bank Transfer', paypal: 'Online / Wallet' }[method] || 'Cash';
+  const p = await ins('payments', { direction, contact_id: c.id, document_id: docId, account_id: account.id, amount, date, method: methodName, note: null });
+  await postJournal({ date, memo: `${direction === 'in' ? 'Received from' : 'Paid to'} ${c.name}`, ref_type: 'payment', ref_id: p.id,
+    lines: direction === 'in' ? [{ account_id: account.id, debit: amount }, { account_id: acc('ar'), credit: amount }]
+      : [{ account_id: acc('ap'), debit: amount }, { account_id: account.id, credit: amount }] });
+}
+async function khMoveSales(docId, salesId) {
+  // credit the shop's own sales account (e.g. Market Stall Sales) instead of the general Sales Revenue
+  const e = S.journal_entries.find(x => x.ref_id === docId) || (await q(sb.from('journal_entries').select('*').eq('ref_id', docId)))[0];
+  if (!e) return;
+  const lines = await q(sb.from('journal_lines').select('*').eq('entry_id', e.id));
+  const l = lines.find(x => x.account_id === sysAcc('sales')?.id);
+  if (l) await q(sb.from('journal_lines').update({ account_id: salesId }).eq('id', l.id));
+}
+
+/* ===================== Bank statement upload =====================
+   Upload a monthly CSV statement from any UK bank. Each line is sorted into the right account
+   (Shopify/TikTok/SumUp payouts → sales, Royal Mail → postage, ATM → cash, …). Lines it can't place
+   are marked "Choose…", and once chosen the same payee is remembered next month.
+   ================================================================= */
+const BS = { rows: [], headers: [], map: {}, lines: [], bankId: null };
+const SHOPIFY_FEE_PCT = 2; // estimate used to split Shopify payouts into sales + fees
+const BS_FIELDS = [
+  ['date', 'Date', /^(date|transaction date|posting date|posted date|value date|completed date)$/i, true],
+  ['desc', 'Description / payee', /^(description|transaction description|details|counter party|counterparty|name|payee|merchant|narrative|memo|reference|transaction details)$/i, true],
+  ['amount', 'Amount (one column, minus = money out)', /^(amount|value|amount \(gbp\)|amount gbp|transaction amount|net amount)$/i],
+  ['in', 'Money in (if separate column)', /^(paid in|money in|credit|credit amount|in|paid in \(gbp\)|deposits?)$/i],
+  ['out', 'Money out (if separate column)', /^(paid out|money out|debit|debit amount|out|paid out \(gbp\)|withdrawals?)$/i],
+  ['ref', 'Reference (optional)', /^(reference|ref|payment reference)$/i],
+];
+const BS_RULES = [
+  // [regex on description, direction ('in' | 'out' | ''), account names to try, special]
+  [/shopify/, 'in', ['Shopify Website Sales'], 'shopify'],
+  [/tiktok/, 'in', ['TikTok Shop Sales']],
+  [/sumup|sum up|zettle|izettle|square/, 'in', ['Market Stall Sales']],
+  [/paypal/, 'in', ['Other Online Sales']],
+  [/cash (dep|in)|counter credit|deposit|paid in at|branch/, 'in', ['Market Stall Sales']],
+  [/atm|cash withdrawal|cashpoint|link /, 'out', ['Cash in Hand']],
+  [/shopify/, 'out', ['Shopify Plan & Apps']],
+  [/royal mail|evri|hermes|dpd|parcelforce|post office|ups |dhl|yodel|packlink|click ?& ?drop/, 'out', ['Postage & Couriers', 'Transport & Freight']],
+  [/facebk|facebook|meta |instagram|tiktok ads|tiktok|google ads/, 'out', ['Social Media & Influencers', 'Marketing']],
+  [/canva|google|godaddy|namecheap|wix|squarespace|adobe|microsoft|apple\.com|icloud/, 'out', ['Website, Domain & Software', 'Office Expenses']],
+  [/insurance|simply business|hiscox|axa|aviva/, 'out', ['Business Insurance']],
+  [/tfl|uber|bolt|trainline|national rail|shell|esso|bp |texaco|parking|ringgo|congestion/, 'out', ['Transport & Freight']],
+  [/covent garden|apple market|market (rent|pitch|fee)|pitch/, 'out', ['Market Pitch & Stall Rent', 'Rent']],
+  [/vistaprint|stickermule|label|packag|boxes|ribbon|tissue|mailer/, 'out', ['Packaging & Gift Boxes', 'Jars, Bottles & Labels']],
+  [/sumup|zettle|paypal fee|stripe/, 'out', ['Payment Processing Fees']],
+  [/charge|fee|commission|overdraft|interest/, 'out', ['Bank Charges', 'Payment Processing Fees', 'General Expenses']],
+  [/accountant|accountancy|bookkeep/, 'out', ['Accountancy & Bookkeeping']],
+  [/ee |vodafone|o2 |three|bt |sky |virgin media/, 'out', ['Office Expenses']],
+];
+function bsKey(desc) {
+  return String(desc || '').toLowerCase().replace(/[0-9*#/\\.,:;-]+/g, ' ').replace(/\b(ref|fp|bp|dd|so|bgc|pos|card|payment|to|from|on|gb|ltd|limited|uk)\b/g, ' ')
+    .replace(/\s+/g, ' ').trim().split(' ').slice(0, 3).join(' ');
+}
+function bsLearned() {
+  // remember how earlier bank lines were sorted: "Bank: <description>" entries → the other account used
+  const m = new Map();
+  S.journal_entries.filter(e => /^Bank: /.test(e.memo || '')).forEach(e => {
+    const lines = S.journal_lines.filter(l => l.entry_id === e.id && l.account_id !== BS.bankId);
+    const pick = lines.sort((a, b) => (+b.debit + +b.credit) - (+a.debit + +a.credit))[0];
+    if (pick) m.set(bsKey(e.memo.slice(6)), pick.account_id);
+  });
+  return m;
+}
+function bsGuess(desc, dir, learned) {
+  const k = bsKey(desc);
+  if (k && learned.has(k)) return { id: learned.get(k), how: 'remembered' };
+  const d = ' ' + String(desc).toLowerCase() + ' ';
+  const sup = S.contacts.find(c => c.type === 'supplier' && c.name.length > 2 && d.includes(c.name.toLowerCase()));
+  if (sup && dir === 'out') return { id: acc('ap'), how: 'supplier', contact: sup };
+  const cus = S.contacts.find(c => c.type === 'customer' && c.name.length > 2 && d.includes(c.name.toLowerCase()));
+  if (cus && dir === 'in') return { id: acc('ar'), how: 'customer', contact: cus };
+  for (const [re, rd, names, special] of BS_RULES) {
+    if (rd && rd !== dir) continue;
+    if (!re.test(d)) continue;
+    const a = accNamed(...names);
+    if (a) return { id: a.id, how: 'rule', special };
+  }
+  return { id: '', how: '' };
+}
+function openBankImport() {
+  const bankOptsList = banks().map(a => [a.id, a.name]);
+  const def = sysAcc('bank')?.id || banks()[0]?.id;
+  openModal('Upload bank statement', `
+    <p class="muted" style="margin:0 0 12px">Download the month's statement from online banking as <b>CSV</b> (sometimes called “Excel” or “spreadsheet”) and upload it here.
+      Each line is sorted automatically. Lines already uploaded are skipped, so it's safe to upload overlapping months.</p>
+    <div class="form-grid">
+      ${fieldHTML({ k: 'bank', label: 'Which account is this statement for?', type: 'select', placeholder: false, options: bankOptsList }, def)}
+      <label class="field"><span>CSV file *</span><input type="file" name="file" accept=".csv,text/csv" required></label>
+    </div>`, {
+    wide: true, submit: 'Read statement',
+    onSubmit: async f => {
+      const file = f.elements.file.files[0];
+      if (!file) throw new Error('Choose the CSV file');
+      let rows = parseCSV(await file.text());
+      // some banks put a few title lines above the real header — find the first row that looks like a header
+      const hi = rows.findIndex(r => r.some(c => /^(date|transaction date|posting date)$/i.test(c.trim())));
+      if (hi > 0) rows = rows.slice(hi);
+      if (rows.length < 2) throw new Error('No transactions found in this file.');
+      const headerLike = rows[0].some(c => /date/i.test(c)) && !rows[0].some(c => dateIn(c));
+      BS.headers = headerLike ? rows[0].map(h => h.trim()) : rows[0].map((_, i) => `Column ${i + 1}`);
+      BS.rows = headerLike ? rows.slice(1) : rows;
+      BS.bankId = f.elements.bank.value;
+      BS.map = {};
+      BS_FIELDS.forEach(([k, , re]) => { const i = BS.headers.findIndex(h => re.test(h)); if (i >= 0 && !Object.values(BS.map).includes(i)) BS.map[k] = i; });
+      if (!headerLike) { // e.g. HSBC: Date, Description, Amount with no header
+        const r = BS.rows[0]; BS.map = {};
+        r.forEach((c, i) => { if (BS.map.date == null && dateIn(c)) BS.map.date = i; else if (BS.map.amount == null && /^-?£?\d[\d,]*\.\d{2}$/.test(c.trim())) BS.map.amount = i; else if (BS.map.desc == null && /[a-z]/i.test(c)) BS.map.desc = i; });
+      }
+      const ok = BS.map.date != null && BS.map.desc != null && (BS.map.amount != null || BS.map.in != null || BS.map.out != null);
+      setTimeout(ok ? bsReview : bsMapping, 0);
+    },
+  });
+}
+function bsMapping() {
+  const opts = [['', '— not in file —'], ...BS.headers.map((h, i) => [String(i), h])];
+  openModal('Match the columns', `<p class="muted" style="margin:0 0 12px">Tell us which column is which (you only do this once per bank).</p>
+    <div class="form-grid">${BS_FIELDS.map(([k, label, , req]) => fieldHTML({ k, label, type: 'select', placeholder: false, required: req, options: opts }, BS.map[k] != null ? String(BS.map[k]) : '')).join('')}</div>`, {
+    wide: true, submit: 'Continue',
+    onSubmit: async f => {
+      BS.map = {};
+      BS_FIELDS.forEach(([k]) => { const v = f.elements[k].value; if (v !== '') BS.map[k] = +v; });
+      if (BS.map.date == null || BS.map.desc == null) throw new Error('Choose the date and description columns');
+      if (BS.map.amount == null && BS.map.in == null && BS.map.out == null) throw new Error('Choose the amount column (or money in / money out)');
+      setTimeout(bsReview, 0);
+    },
+  });
+}
+function bsBuild() {
+  const M = BS.map, get = (r, k) => (M[k] != null ? String(r[M[k]] ?? '').trim() : '');
+  const learned = bsLearned();
+  const done = new Set(S.journal_lines.filter(l => l.account_id === BS.bankId).map(l => { const e = S.entryById.get(l.entry_id); return e ? `${e.date}|${r2(+l.debit - +l.credit)}|${e.memo}` : ''; }));
+  const seen = new Map();
+  return BS.rows.map(r => {
+    const date = dateIn(get(r, 'date'));
+    let amt;
+    if (M.amount != null) amt = moneyIn(get(r, 'amount'));
+    else amt = moneyIn(get(r, 'in')) - Math.abs(moneyIn(get(r, 'out')));
+    const desc = [get(r, 'desc'), M.ref != null && M.ref !== M.desc ? get(r, 'ref') : ''].filter(Boolean).join(' · ').slice(0, 120) || 'Bank transaction';
+    if (!date || !amt) return null;
+    const dir = amt > 0 ? 'in' : 'out';
+    const memo = `Bank: ${desc}`;
+    const key = `${date}|${r2(amt)}|${memo}`;
+    const n = (seen.get(key) || 0) + 1; seen.set(key, n);
+    const g = bsGuess(desc, dir, learned);
+    return { date, desc, amt: r2(amt), dir, memo, account_id: g.id, how: g.how, special: g.special, contact: g.contact, skip: n === 1 && done.has(key) ? 'already uploaded' : '' };
+  }).filter(Boolean);
+}
+function bsReview() {
+  try { BS.lines = bsBuild(); } catch (e) { return toast(e.message, 'err'); }
+  const L = BS.lines, todo = L.filter(l => !l.skip);
+  const unknown = todo.filter(l => !l.account_id).length;
+  const others = a => a.id !== BS.bankId && a.sys !== 'inventory' && a.sys !== 'cogs';
+  const row = (l, i) => `<tr class="${l.skip ? 'muted' : ''}">
+    <td><input type="checkbox" class="bs-on" data-i="${i}" ${l.skip ? '' : 'checked'} ${l.skip ? 'disabled' : ''}></td>
+    <td style="white-space:nowrap">${fmtDate(l.date)}</td>
+    <td style="min-width:200px">${esc(l.desc)}${l.how === 'remembered' ? ' <span class="badge b-paid">remembered</span>' : ''}${l.contact ? ` <span class="badge">${esc(l.contact.name)}</span>` : ''}${l.skip ? ` <span class="badge">${l.skip}</span>` : ''}</td>
+    <td class="r ${l.dir === 'in' ? 'up' : 'down'}" style="white-space:nowrap"><b>${l.dir === 'in' ? '+' : '−'}${fmtN(Math.abs(l.amt))}</b></td>
+    <td>${l.skip ? '' : `<select class="bs-acc ${l.account_id ? '' : 'bs-need'}" data-i="${i}" onchange="this.classList.toggle('bs-need',!this.value);bsCount()"><option value="">Choose…</option>${accOptions(l.account_id, others)}</select>`}</td></tr>`;
+  openModal(`Bank statement — ${todo.length} new line${todo.length === 1 ? '' : 's'}`, `
+    <div class="grid g4 mb">${kpi('Money in', money0(sum(todo.filter(l => l.dir === 'in'), l => l.amt)))}${kpi('Money out', money0(-sum(todo.filter(l => l.dir === 'out'), l => l.amt)))}
+      ${kpi('Sorted automatically', String(todo.length - unknown))}${kpi('Need you', `<i id="bsNeed" style="font-style:normal">${unknown}</i>`, 'choose a category', unknown ? 'bad' : '')}</div>
+    <p class="muted small" style="margin:0 0 10px">Shopify payouts are counted as Shopify sales; about ${SHOPIFY_FEE_PCT}% is added back as Shopify fees (an estimate). Cash paid into the bank is counted as market stall sales — change any line if that's not right.</p>
+    <div class="table-wrap"><table class="tbl bs-tbl"><thead><tr><th></th><th>Date</th><th>Description</th><th class="r">Amount</th><th>Goes to</th></tr></thead>
+    <tbody>${L.map(row).join('')}</tbody></table></div>`, {
+    wide: true, submit: todo.length ? 'Save to books' : 'Close', noFocus: true,
+    onSubmit: async f => { if (todo.length) await bsSave(f); },
+  });
+}
+function bsCount() { const el = $('#bsNeed'); if (el) el.textContent = $$('.bs-acc').filter(s => !s.value && $(`.bs-on[data-i="${s.dataset.i}"]`)?.checked).length; }
+async function bsSave(f) {
+  const pick = $$('.bs-on', f).filter(c => c.checked).map(c => +c.dataset.i);
+  const missing = pick.filter(i => !$(`.bs-acc[data-i="${i}"]`, f)?.value);
+  if (missing.length) throw new Error(`Choose where ${missing.length} line(s) go, or untick them`);
+  if (!pick.length) throw new Error('Nothing selected');
+  const bank = BS.bankId, fees = accNamed('Payment Processing Fees');
+  let n = 0;
+  for (const i of pick) {
+    const l = BS.lines[i], other = $(`.bs-acc[data-i="${i}"]`, f).value, a = Math.abs(l.amt);
+    checkLock(l.date);
+    const ref = uuid();
+    let lines;
+    if (l.dir === 'in') {
+      const shop = l.special === 'shopify' && other === l.account_id && fees;
+      const gross = shop ? r2(a / (1 - SHOPIFY_FEE_PCT / 100)) : a;
+      lines = [{ account_id: bank, debit: a }, ...(shop ? [{ account_id: fees.id, debit: r2(gross - a) }] : []), { account_id: other, credit: gross }];
+    } else lines = [{ account_id: other, debit: a }, { account_id: bank, credit: a }];
+    if ((other === acc('ap') || other === acc('ar')) && l.contact) {
+      const p = await ins('payments', { direction: l.dir, contact_id: l.contact.id, document_id: null, account_id: bank, amount: a, date: l.date, method: 'Bank Transfer', note: l.desc });
+      await postJournal({ date: l.date, memo: l.memo, ref_type: 'payment', ref_id: p.id, lines });
+    } else {
+      await postJournal({ date: l.date, memo: l.memo, ref_type: 'journal', ref_id: ref, lines });
+    }
+    n++;
+    if (n % 15 === 0) toast(`Saved ${n} of ${pick.length}…`);
+  }
+  await refresh();
+  toast(`${n} bank line${n === 1 ? '' : 's'} saved`);
+}
+
+/* ===================== UK shop: online orders, market days, payouts =====================
+   For businesses set up as "UK Online Shop & Market Stall" (e.g. Shea Luv).
+   - Import Shopify / TikTok Shop order exports (CSV) → sales, delivery, VAT, refunds, stock and cost of sales
+   - Record a market day (cash + card takings, products sold, pitch rent)
+   - Record payouts from Shopify / TikTok / PayPal / SumUp to the bank (with fees)
+   ========================================================================================= */
+const SHOP = {
+  shopifyClr: 'Shopify Payments Balance', tiktokClr: 'TikTok Shop Balance', paypalClr: 'PayPal Balance', cardClr: 'Card Reader (SumUp) Balance',
+  shopifySales: 'Shopify Website Sales', tiktokSales: 'TikTok Shop Sales', marketSales: 'Market Stall Sales', otherSales: 'Other Online Sales',
+  delivery: 'Delivery Charges Received', refunds: 'Refunds & Returns', procFees: 'Payment Processing Fees', mktFees: 'TikTok Shop & Marketplace Fees',
+  pitch: 'Market Pitch & Stall Rent',
+};
+const CHANNELS = {
+  shopify: { label: 'Shopify', sales: SHOP.shopifySales, clr: SHOP.shopifyClr },
+  tiktok: { label: 'TikTok Shop', sales: SHOP.tiktokSales, clr: SHOP.tiktokClr },
+  other: { label: 'Other online', sales: SHOP.otherSales, clr: SHOP.paypalClr },
+};
+const SHOP_MEMO = /^(Shopify|TikTok Shop|Other online) (order|refund) |^Market day |^Payout /;
+function shopAcc(name) {
+  const a = S.accounts.find(x => x.name.toLowerCase() === name.toLowerCase());
+  if (!a) throw new Error(`Account "${name}" is missing. Go to Settings → Business type and choose "UK Online Shop & Market Stall".`);
+  return a;
+}
+async function ensureShopAccounts() {
+  const add = await addMissingAccounts(BIZ_TYPES.retail_uk.accounts);
+  if (add.length) await reload();
+}
+const cashAcc = () => S.accounts.find(a => a.sys === 'cash') || banks()[0];
+
+/* ---------- CSV ---------- */
+function parseCSV(text) {
+  const rows = []; let row = [], f = '', qd = false;
+  text = text.replace(/^﻿/, '');
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (qd) {
+      if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else qd = false; }
+      else f += c;
+    } else if (c === '"') qd = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(f); f = '';
+      if (row.some(x => x.trim() !== '')) rows.push(row);
+      row = [];
+    } else f += c;
+  }
+  row.push(f);
+  if (row.some(x => x.trim() !== '')) rows.push(row);
+  return rows;
+}
+const moneyIn = v => { const n = parseFloat(String(v ?? '').replace(/[£$€,\s]|GBP/gi, '')); return Number.isFinite(n) ? n : 0; };
+function dateIn(v) {
+  const s = String(v || '').trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/); // UK style DD/MM/YYYY
+  if (m) { let d = +m[1], mo = +m[2]; if (mo > 12 && d <= 12) [d, mo] = [mo, d]; return `${m[3]}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`; }
+  return null;
+}
+
+/* ---------- Import ---------- */
+const IMP = { headers: [], rows: [], orders: [], channel: 'shopify', map: {} };
+const MAP_FIELDS = [
+  ['id', 'Order ID / number', /^(order id|order number|order no|name|order)$/i, true],
+  ['date', 'Order date', /^(paid at|created at|created time|order date|date|paid time)$/i, true],
+  ['total', 'Order total (what the customer paid)', /^(total|order amount|order total|grand total|total amount)$/i, true],
+  ['shipping', 'Delivery / shipping charged', /^(shipping|shipping fee after discount|shipping fee|delivery|postage)$/i],
+  ['tax', 'VAT / tax', /^(taxes|tax|vat|taxes amount)$/i],
+  ['refund', 'Refunded amount', /^(refunded amount|refund amount|refund)$/i],
+  ['status', 'Order / payment status', /^(financial status|order status|status)$/i],
+  ['pay', 'Payment method', /^(payment method|payment gateway|payment)$/i],
+  ['item', 'Product name', /^(lineitem name|product name|item name|product|sku name)$/i],
+  ['sku', 'SKU', /^(lineitem sku|seller sku|sku)$/i],
+  ['qty', 'Quantity', /^(lineitem quantity|quantity|qty)$/i],
+];
+function openImport() {
+  if (!isShop()) return toast('Set business type to "UK Online Shop & Market Stall" in Settings first.', 'err');
+  openModal('Import online orders', `
+    <p class="muted" style="margin:0 0 12px">Export your orders as a CSV file and upload it here. Orders already imported are skipped automatically, so you can upload the same file again safely.</p>
+    <div class="grid g2 mb">
+      <div class="alert info"><span class="dot"></span><div><b>Shopify</b><br>Orders → Export → <i>Current page / All orders / dates</i> → <b>CSV for Excel</b>.</div></div>
+      <div class="alert info"><span class="dot"></span><div><b>TikTok Shop</b><br>Seller Centre → Orders → Manage orders → <b>Export orders</b> (CSV).</div></div>
+    </div>
+    <div class="form-grid">
+      ${fieldHTML({ k: 'channel', label: 'Where are these orders from?', type: 'select', placeholder: false, options: Object.entries(CHANNELS).map(([k, c]) => [k, c.label]) }, 'shopify')}
+      <label class="field"><span>CSV file *</span><input type="file" name="file" accept=".csv,text/csv" required></label>
+    </div>`, {
+    wide: true, submit: 'Read file',
+    onSubmit: async f => {
+      const file = f.elements.file.files[0];
+      if (!file) throw new Error('Choose a CSV file');
+      const rows = parseCSV(await file.text());
+      if (rows.length < 2) throw new Error('This file has no orders in it.');
+      IMP.headers = rows[0].map(h => h.trim());
+      IMP.rows = rows.slice(1);
+      IMP.channel = f.elements.channel.value;
+      IMP.map = {};
+      MAP_FIELDS.forEach(([k, , re]) => { const i = IMP.headers.findIndex(h => re.test(h)); if (i >= 0) IMP.map[k] = i; });
+      const created = IMP.headers.findIndex(h => /^(created at|created time)$/i.test(h));
+      if (created >= 0) IMP.created = created; else delete IMP.created;
+      setTimeout(() => (MAP_FIELDS.filter(x => x[3]).every(([k]) => IMP.map[k] != null) && IMP.channel === 'shopify' ? previewImport() : openMapping()), 0);
+    },
+  });
+}
+function openMapping() {
+  const opts = [['', '— not in file —'], ...IMP.headers.map((h, i) => [String(i), h])];
+  openModal('Match the columns', `
+    <p class="muted" style="margin:0 0 12px">We guessed which column is which. Check the ones marked * and press Continue.</p>
+    <div class="form-grid">${MAP_FIELDS.map(([k, label, , req]) => fieldHTML({ k, label, type: 'select', placeholder: false, required: req, options: opts }, IMP.map[k] != null ? String(IMP.map[k]) : '')).join('')}</div>`, {
+    wide: true, submit: 'Continue',
+    onSubmit: async f => {
+      IMP.map = {};
+      MAP_FIELDS.forEach(([k]) => { const v = f.elements[k].value; if (v !== '') IMP.map[k] = +v; });
+      const miss = MAP_FIELDS.filter(x => x[3] && IMP.map[x[0]] == null);
+      if (miss.length) throw new Error('Please choose: ' + miss.map(x => x[1]).join(', '));
+      setTimeout(previewImport, 0);
+    },
+  });
+}
+function matchProduct(name, sku) {
+  const s = String(sku || '').trim().toLowerCase(), n = String(name || '').trim().toLowerCase();
+  if (s) { const p = S.products.find(x => x.sku && String(x.sku).trim().toLowerCase() === s); if (p) return p; }
+  if (!n) return null;
+  const exact = S.products.find(x => x.name.toLowerCase() === n);
+  if (exact) return exact;
+  return S.products.filter(x => n.includes(x.name.toLowerCase()) || x.name.toLowerCase().includes(n))
+    .sort((a, b) => b.name.length - a.name.length)[0] || null;
+}
+function buildOrders() {
+  const M = IMP.map, get = (r, k) => (M[k] != null ? String(r[M[k]] ?? '').trim() : '');
+  const ordersById = new Map();
+  for (const r of IMP.rows) {
+    const id = get(r, 'id').replace(/^'/, '');
+    if (!id) continue;
+    let o = ordersById.get(id);
+    if (!o) { o = { id, date: null, total: 0, shipping: 0, tax: 0, refund: 0, status: '', pay: '', items: [] }; ordersById.set(id, o); }
+    if (!o.date) o.date = dateIn(get(r, 'date')) || (IMP.created != null ? dateIn(r[IMP.created]) : null);
+    if (!o.total) o.total = moneyIn(get(r, 'total'));
+    if (!o.shipping) o.shipping = moneyIn(get(r, 'shipping'));
+    if (!o.tax) o.tax = moneyIn(get(r, 'tax'));
+    if (!o.refund) o.refund = moneyIn(get(r, 'refund'));
+    if (!o.status) o.status = get(r, 'status').toLowerCase();
+    if (!o.pay) o.pay = get(r, 'pay').toLowerCase();
+    const item = get(r, 'item'), sku = get(r, 'sku');
+    if (item || sku) {
+      const qty = M.qty != null ? moneyIn(get(r, 'qty')) : 1;
+      if (qty > 0) o.items.push({ name: item || sku, sku, qty, product: matchProduct(item, sku) });
+    }
+  }
+  const skipStatus = /pending|voided|authori[sz]ed|expired|cancel|unpaid|awaiting/;
+  const ch = CHANNELS[IMP.channel];
+  const done = new Set(S.journal_entries.map(e => e.memo));
+  return [...ordersById.values()].map(o => {
+    o.memo = `${ch.label} order ${o.id}`;
+    o.skip = skipStatus.test(o.status) ? o.status : !o.date ? 'no date' : o.total <= 0 ? 'no total' : done.has(o.memo) ? 'already imported' : '';
+    return o;
+  });
+}
+function previewImport() {
+  try { IMP.orders = buildOrders(); } catch (e) { return toast(e.message, 'err'); }
+  const ok = IMP.orders.filter(o => !o.skip), skipped = IMP.orders.filter(o => o.skip);
+  const unmatched = [...new Set(ok.flatMap(o => o.items.filter(i => !i.product).map(i => i.name)))];
+  const ch = CHANNELS[IMP.channel];
+  const clrOpts = banks().map(a => [a.id, a.name]);
+  let clrDefault = null; try { clrDefault = shopAcc(ch.clr).id; } catch (e) { /* created on import */ }
+  openModal(`Import ${ok.length} ${ch.label} order${ok.length === 1 ? '' : 's'}`, `
+    <div class="grid g4 mb">${kpi('New orders', String(ok.length))}${kpi('Sales total', money0(sum(ok, o => o.total)))}
+      ${kpi('Refunds', money0(sum(ok, o => o.refund)))}${kpi('Skipped', String(skipped.length), skipped.length ? 'already imported / unpaid' : '')}</div>
+    ${unmatched.length ? `<div class="alert warn mb"><span class="dot"></span><div><b>${unmatched.length} product name(s) not found in Products & Stock</b> — sales will still be recorded, but stock and cost of sales won't be updated for: ${esc(unmatched.slice(0, 8).join(', '))}${unmatched.length > 8 ? '…' : ''}. Tip: add the same SKU to your products.</div></div>` : ''}
+    ${fieldHTML({ k: 'clr', label: 'Money from these orders goes to', type: 'select', placeholder: false, options: clrOpts, hint: 'PayPal orders from Shopify go to "PayPal Balance" automatically.' }, clrDefault)}
+    ${table([
+      { h: 'Order', f: o => `<b>${esc(o.id)}</b>` },
+      { h: 'Date', f: o => fmtDate(o.date) },
+      { h: 'Items', f: o => esc(o.items.map(i => `${i.qty}× ${i.name}`).join(', ')).slice(0, 90) },
+      { h: 'Total', r: 1, f: o => fmtN(o.total) },
+      { h: '', f: o => o.skip ? `<span class="badge">${esc(o.skip)}</span>` : (o.refund ? '<span class="badge b-overdue">refund</span>' : '') },
+    ], IMP.orders.slice(0, 60), { empty: 'No orders found.' })}
+    ${IMP.orders.length > 60 ? `<p class="muted small">Showing 60 of ${IMP.orders.length}.</p>` : ''}`, {
+    wide: true, submit: ok.length ? `Import ${ok.length} orders` : 'Close', noFocus: true,
+    onSubmit: async f => { if (ok.length) await runImport(ok, f.elements.clr?.value); },
+  });
+}
+async function runImport(list, clrId) {
+  await ensureShopAccounts();
+  const ch = CHANNELS[IMP.channel];
+  const sales = shopAcc(ch.sales).id, deliv = shopAcc(SHOP.delivery).id, refunds = shopAcc(SHOP.refunds).id;
+  const paypal = shopAcc(SHOP.paypalClr).id;
+  const wh = mainWh()?.id;
+  let n = 0;
+  for (const o of list) {
+    checkLock(o.date);
+    const clr = IMP.channel === 'shopify' && /paypal/.test(o.pay) ? paypal : (clrId || shopAcc(ch.clr).id);
+    const ref = uuid();
+    const tax = r2(Math.min(o.tax, o.total)), ship = r2(Math.min(o.shipping, o.total - tax));
+    let cogs = 0;
+    const moves = [];
+    for (const i of o.items) {
+      if (!i.product) continue;
+      cogs += i.qty * (+i.product.cost || 0);
+      moves.push({ product_id: i.product.id, warehouse_id: wh, qty: -i.qty, date: o.date, ref_type: 'invoice', ref_id: ref, note: o.memo });
+    }
+    await postJournal({
+      date: o.date, memo: o.memo, ref_type: 'journal', ref_id: ref, lines: [
+        { account_id: clr, debit: o.total },
+        { account_id: sales, credit: r2(o.total - ship - tax) },
+        { account_id: deliv, credit: ship },
+        { account_id: acc('tax'), credit: tax },
+        { account_id: acc('cogs'), debit: r2(cogs) },
+        { account_id: acc('inventory'), credit: r2(cogs) },
+      ],
+    });
+    if (moves.length) await insMany('stock_moves', moves);
+    if (o.refund > 0) {
+      await postJournal({
+        date: o.date, memo: `${ch.label} refund ${o.id}`, ref_type: 'journal', ref_id: ref,
+        lines: [{ account_id: refunds, debit: r2(Math.min(o.refund, o.total)) }, { account_id: clr, credit: r2(Math.min(o.refund, o.total)) }],
+      });
+    }
+    n++;
+    if (n % 10 === 0) toast(`Imported ${n} of ${list.length}…`);
+  }
+  await refresh();
+  toast(`${n} order${n === 1 ? '' : 's'} imported`);
+}
+
+/* ---------- Market day ---------- */
+function openMarketDay() {
+  if (!isShop()) return toast('Set business type to "UK Online Shop & Market Stall" in Settings first.', 'err');
+  const prods = S.products.slice().sort(byName);
+  const bankList = banks().map(a => [a.id, a.name]);
+  let cardDef = null; try { cardDef = shopAcc(SHOP.cardClr).id; } catch (e) { cardDef = banks()[0]?.id; }
+  openModal('Record a market day', `
+    <div class="form-grid">
+      ${fieldHTML({ k: 'date', label: 'Date', type: 'date', required: true }, today())}
+      ${fieldHTML({ k: 'place', label: 'Market', required: true }, 'Apple Market, Covent Garden')}
+      ${fieldHTML({ k: 'cash', label: 'Cash taken (£)', type: 'number', min: 0 }, '')}
+      ${fieldHTML({ k: 'card', label: 'Card taken (£)', type: 'number', min: 0 }, '')}
+      ${fieldHTML({ k: 'card_acc', label: 'Card money goes to', type: 'select', placeholder: false, options: bankList }, cardDef)}
+      ${fieldHTML({ k: 'cash_acc', label: 'Cash kept in', type: 'select', placeholder: false, options: bankList }, cashAcc()?.id)}
+      ${fieldHTML({ k: 'pitch', label: 'Pitch / stall rent paid (£)', type: 'number', min: 0, hint: 'Paid from the cash account above. Leave empty if none.' }, '')}
+    </div>
+    ${prods.length ? `<h4 style="margin:16px 0 6px">Products sold today <span class="muted small">(optional — updates stock and profit)</span></h4>
+    <div class="table-wrap"><table class="tbl"><tbody>${prods.map(p => `<tr><td>${esc(p.name)}<div class="muted small">${esc(p.sku || '')} · in stock ${stockOf(p.id)}</div></td>
+      <td class="r" style="width:110px"><input type="number" min="0" step="1" class="md-q" data-id="${p.id}" placeholder="0" style="width:90px"></td></tr>`).join('')}</tbody></table></div>` : ''}`, {
+    wide: true, submit: 'Save market day',
+    onSubmit: async f => {
+      const E = f.elements, date = E.date.value, cash = num(E.cash.value), card = num(E.card.value), pitch = num(E.pitch.value);
+      if (cash + card <= 0 && pitch <= 0) throw new Error('Enter the cash or card taken');
+      checkLock(date);
+      await ensureShopAccounts();
+      const ref = uuid(), memo = `Market day ${E.place.value.trim()} ${fmtDate(date)}`, wh = mainWh()?.id;
+      let cogs = 0; const moves = [];
+      $$('.md-q', f).forEach(i => {
+        const qn = num(i.value); if (qn <= 0) return;
+        const p = byId('products', i.dataset.id);
+        cogs += qn * (+p.cost || 0);
+        moves.push({ product_id: p.id, warehouse_id: wh, qty: -qn, date, ref_type: 'invoice', ref_id: ref, note: memo });
+      });
+      if (cash + card > 0) {
+        await postJournal({
+          date, memo, ref_type: 'journal', ref_id: ref, lines: [
+            { account_id: E.cash_acc.value, debit: cash }, { account_id: E.card_acc.value, debit: card },
+            { account_id: shopAcc(SHOP.marketSales).id, credit: r2(cash + card) },
+            { account_id: acc('cogs'), debit: r2(cogs) }, { account_id: acc('inventory'), credit: r2(cogs) },
+          ],
+        });
+        if (moves.length) await insMany('stock_moves', moves);
+      }
+      if (pitch > 0) {
+        const row = await ins('expenses', { account_id: shopAcc(SHOP.pitch).id, amount: pitch, date, paid_from: E.cash_acc.value, payee: E.place.value.trim(), note: 'Market pitch' });
+        await postJournal({ date, memo: `Expense: ${SHOP.pitch} — ${row.payee}`, ref_type: 'expense', ref_id: row.id,
+          lines: [{ account_id: row.account_id, debit: pitch }, { account_id: row.paid_from, credit: pitch }] });
+      }
+      await refresh(); toast('Market day saved');
+    },
+  });
+}
+
+/* ---------- Payouts ---------- */
+function openPayoutForm() {
+  if (!isShop()) return toast('Set business type to "UK Online Shop & Market Stall" in Settings first.', 'err');
+  const clrNames = [SHOP.shopifyClr, SHOP.tiktokClr, SHOP.paypalClr, SHOP.cardClr].map(n => n.toLowerCase());
+  const from = banks().filter(a => clrNames.includes(a.name.toLowerCase())).map(a => [a.id, a.name]);
+  const to = banks().filter(a => !clrNames.includes(a.name.toLowerCase())).map(a => [a.id, a.name]);
+  const s = sums(null, null);
+  formModal('Record a payout to the bank', [
+    { k: 'from', label: 'Payout from', type: 'select', required: true, placeholder: false, options: from.map(([id, n]) => [id, `${n} (balance ${fmtN(natural(byId('accounts', id), s.get(id)))})`]) },
+    { k: 'to', label: 'Paid into', type: 'select', required: true, placeholder: false, options: to, default: S.accounts.find(a => a.sys === 'bank')?.id },
+    { k: 'date', label: 'Date', type: 'date', required: true, default: today() },
+    { k: 'amount', label: 'Amount received in bank (£)', type: 'number', required: true, min: 0 },
+    { k: 'fees', label: 'Fees deducted (£)', type: 'number', min: 0, hint: 'Shown on the payout report (Shopify: Finances → Payouts; TikTok: Finance → Statements).' },
+  ], null, async v => {
+    if (v.amount <= 0 && v.fees <= 0) throw new Error('Enter the amount received');
+    checkLock(v.date);
+    const src = byId('accounts', v.from);
+    const feeAcc = shopAcc(/tiktok/i.test(src.name) ? SHOP.mktFees : SHOP.procFees).id;
+    await postJournal({
+      date: v.date, memo: `Payout ${src.name} → ${byId('accounts', v.to)?.name || 'Bank'}`, ref_type: 'journal', ref_id: uuid(), lines: [
+        { account_id: v.to, debit: v.amount }, { account_id: feeAcc, debit: v.fees }, { account_id: v.from, credit: r2(v.amount + v.fees) },
+      ],
+    });
+    await refresh(); toast('Payout saved');
+  });
+}
+
+/* ---------- Page ---------- */
+PAGES.online = () => {
+  if (!isShop()) return `<div class="card"><div class="alert info"><span class="dot"></span><div>Go to <a href="#/settings">Settings → Business type</a> and choose <b>UK Online Shop & Market Stall</b> to use this page.</div></div></div>`;
+  const t = today(), ms = monthStart(t), s = sums(ms, t), all = sums(null, null);
+  const val = name => { const a = S.accounts.find(x => x.name.toLowerCase() === name.toLowerCase()); return a ? natural(a, s.get(a.id)) : 0; };
+  const bal = name => { const a = S.accounts.find(x => x.name.toLowerCase() === name.toLowerCase()); return a ? natural(a, all.get(a.id)) : 0; };
+  const entries = S.journal_entries.filter(e => SHOP_MEMO.test(e.memo || '')).sort((a, b) => b.date.localeCompare(a.date) || String(b.created_at).localeCompare(String(a.created_at)));
+  const linesOf = id => S.journal_lines.filter(l => l.entry_id === id);
+  const monthOrders = entries.filter(e => e.date >= ms && /^Shopify order /.test(e.memo)).length;
+  return `<div class="quick mb">
+      <button type="button" onclick="openImport()">${ic('cart')}Import Shopify / TikTok orders</button>
+      <button type="button" onclick="openMarketDay()">${ic('wallet')}Record market day</button>
+      <button type="button" onclick="openPayoutForm()">${ic('bank')}Record payout</button>
+      <button type="button" onclick="openBankImport()">${ic('file')}Upload bank statement</button>
+      <button type="button" onclick="openExpenseForm()">${ic('dollar')}Add expense</button>
+      <button type="button" onclick="UI.report='vat';go('reports')">${ic('chart')}VAT summary</button>
+    </div>
+    <div class="grid g4 mb">
+      ${kpi('Shopify sales this month', money0(val(SHOP.shopifySales)), `${monthOrders} order(s)`)}
+      ${kpi('TikTok Shop sales this month', money0(val(SHOP.tiktokSales)))}
+      ${kpi('Market sales this month', money0(val(SHOP.marketSales)))}
+      ${kpi('Refunds this month', money0(-val(SHOP.refunds)), '', val(SHOP.refunds) < 0 ? 'bad' : '')}
+    </div>
+    <div class="grid g4 mb">
+      ${kpi('Waiting in Shopify', money0(bal(SHOP.shopifyClr)), 'Not yet paid to bank')}
+      ${kpi('Waiting in TikTok Shop', money0(bal(SHOP.tiktokClr)), 'Not yet paid to bank')}
+      ${kpi('Waiting in PayPal', money0(bal(SHOP.paypalClr)))}
+      ${kpi('Waiting in card reader', money0(bal(SHOP.cardClr)))}
+    </div>
+    <div class="card"><div class="card-head"><h3>Orders, market days & payouts</h3><span class="grow"></span>${searchBox()}</div>
+    ${table([
+      { h: 'Date', f: e => fmtDate(e.date) },
+      { h: 'Details', f: e => `<b>${esc(e.memo)}</b><div class="small muted">${linesOf(e.id).map(l => `${esc(byId('accounts', l.account_id)?.name || '')} ${+l.debit ? 'Dr ' + fmtN(l.debit) : 'Cr ' + fmtN(l.credit)}`).join(' · ')}</div>` },
+      { h: 'Amount', r: 1, f: e => `<b>${fmtN(sum(linesOf(e.id), l => l.debit) - sum(linesOf(e.id).filter(l => S.accounts.find(a => a.id === l.account_id)?.sys === 'cogs'), l => l.debit))}</b>` },
+      { h: '', r: 1, f: e => `<div class="acts">${actBtn('trash', `deleteEntry('${e.id}')`, 'Delete')}</div>` },
+    ], entries.slice(0, 300), { empty: 'Nothing yet. Import your Shopify orders or record a market day to start.' })}</div>`;
+};
+
+/* ---------- Reports ---------- */
+function channelReport() {
+  const s = sums(UI.from, UI.to);
+  const list = S.accounts.filter(a => a.type === 'income').map(a => [a.name, natural(a, s.get(a.id))]).filter(x => Math.abs(x[1]) > 0.001).sort((a, b) => b[1] - a[1]);
+  const t = sum(list, x => x[1]);
+  const count = re => S.journal_entries.filter(e => e.date >= UI.from && e.date <= UI.to && re.test(e.memo || '')).length;
+  const counts = { [SHOP.shopifySales]: count(/^Shopify order /), [SHOP.tiktokSales]: count(/^TikTok Shop order /), [SHOP.marketSales]: count(/^Market day /), [SHOP.otherSales]: count(/^Other online order /), 'Sales Revenue': S.documents.filter(d => d.kind === 'invoice' && d.date >= UI.from && d.date <= UI.to).length };
+  const rows = list.map(([n, v]) => ({ cells: [n, counts[n] != null ? String(counts[n]) : '', v, t ? `${Math.round(v / t * 100)}%` : ''] }));
+  rows.push({ cls: 'grand', cells: ['Total sales (after refunds)', '', t, '100%'] });
+  return { title: 'Sales by Channel', sub: range() + ' · orders / market days / invoices', cols: [{ h: 'Channel' }, { h: 'Count', r: 1 }, { h: 'Sales', r: 1 }, { h: 'Share', r: 1 }], rows: list.length ? rows : [] };
+}
+function marginReport() {
+  const sold = new Map();
+  S.stock_moves.filter(m => m.ref_type === 'invoice' && +m.qty < 0 && m.date >= UI.from && m.date <= UI.to)
+    .forEach(m => sold.set(m.product_id, (sold.get(m.product_id) || 0) - +m.qty));
+  const list = S.products.slice().sort(byName);
+  const rows = list.map(p => {
+    const price = +p.price || 0, cost = +p.cost || 0, q2 = sold.get(p.id) || 0;
+    return { cells: [p.name, price, cost, price - cost, price ? `${Math.round((price - cost) / price * 100)}%` : '—', String(r2(q2)), q2 * (price - cost)] };
+  });
+  rows.push({ cls: 'grand', cells: ['Total', '', '', '', '', String(r2(sum([...sold.values()], x => x))), sum(list, p => (sold.get(p.id) || 0) * ((+p.price || 0) - (+p.cost || 0)))] });
+  return { title: 'Product Margins', sub: range() + ' · uses selling price and cost price from Products & Stock (all channels)', cols: [{ h: 'Product' }, { h: 'Price', r: 1 }, { h: 'Cost', r: 1 }, { h: 'Profit / unit', r: 1 }, { h: 'Margin', r: 1 }, { h: 'Sold', r: 1 }, { h: 'Est. profit', r: 1 }], rows: list.length ? rows : [] };
+}
+const VAT_THRESHOLD = 90000; // UK VAT registration threshold (rolling 12 months) — check gov.uk if it changes
+function vatReport() {
+  const taxId = S.accounts.find(a => a.sys === 'tax')?.id;
+  let out = 0, inp = 0;
+  S.journal_lines.forEach(l => {
+    if (l.account_id !== taxId) return;
+    const e = S.entryById.get(l.entry_id);
+    if (!e || e.date < UI.from || e.date > UI.to) return;
+    if (['invoice', 'journal'].includes(e.ref_type)) out += +l.credit - (e.ref_type === 'invoice' ? +l.debit : 0);
+    if (['bill', 'expense'].includes(e.ref_type)) inp += +l.debit;
+  });
+  const s = sums(UI.from, UI.to);
+  const salesEx = sum(S.accounts.filter(a => a.type === 'income'), a => natural(a, s.get(a.id)));
+  const buysEx = sum(S.documents.filter(d => d.kind === 'bill' && d.date >= UI.from && d.date <= UI.to), d => +d.subtotal - +d.discount)
+    + sum(S.expenses.filter(e => e.date >= UI.from && e.date <= UI.to), e => e.amount);
+  const y0 = addDays(UI.to, -364), ys = sums(y0, UI.to);
+  const turnover12 = sum(S.accounts.filter(a => a.type === 'income'), a => natural(a, ys.get(a.id)));
+  const pctT = Math.round(turnover12 / VAT_THRESHOLD * 100);
+  const rows = [
+    { cells: ['Box 1', 'VAT due on sales', r2(out)] },
+    { cells: ['Box 2', 'VAT due on acquisitions from EU (Northern Ireland only)', 0] },
+    { cls: 'total', cells: ['Box 3', 'Total VAT due (Box 1 + 2)', r2(out)] },
+    { cells: ['Box 4', 'VAT reclaimed on purchases', r2(inp)] },
+    { cls: 'grand', cells: ['Box 5', out - inp >= 0 ? 'Net VAT to pay HMRC' : 'Net VAT HMRC owes you', r2(Math.abs(out - inp))] },
+    { cells: ['Box 6', 'Total sales excluding VAT', r2(salesEx)] },
+    { cells: ['Box 7', 'Total purchases & expenses excluding VAT', r2(buysEx)] },
+    { cells: ['Box 8', 'Goods supplied to EU (Northern Ireland only)', 0] },
+    { cells: ['Box 9', 'Goods acquired from EU (Northern Ireland only)', 0] },
+    { cls: 'head', cells: ['', 'VAT registration check', ''] },
+    { cells: ['', `Sales in the 12 months to ${fmtDate(UI.to)}`, r2(turnover12)] },
+    { cells: ['', `UK registration threshold (£${fmt0(VAT_THRESHOLD)}) — you are at ${pctT}%${pctT >= 100 ? ' · OVER: you must register for VAT' : pctT >= 80 ? ' · getting close, speak to your accountant' : ''}`, VAT_THRESHOLD] },
+  ];
+  return { title: 'UK VAT Summary', sub: `${range()} · a summary for you and your accountant — not submitted to HMRC`, cols: [{ h: 'Box' }, { h: 'Description' }, { h: 'Amount', r: 1 }], rows };
 }
 
 /* ===================== Reports ===================== */
@@ -1842,6 +2841,7 @@ const REPORTS = [
   ['ar', 'Receivables Aging', false], ['ap', 'Payables Aging', false], ['stock', 'Stock Report', false],
   ['salesc', 'Sales by Customer', true], ['salesp', 'Sales by Product', true], ['exp', 'Expenses by Category', true],
   ['tax', 'Tax Summary', true], ['ledger', 'Account Ledger', true],
+  ['channel', 'Sales by Channel', true], ['margin', 'Product Margins', true], ['vat', 'UK VAT Summary', true],
 ];
 PAGES.reports = () => {
   if (!UI.to) UI.to = today();
@@ -1988,6 +2988,9 @@ const REPORT_FN = {
       { cls: 'grand', cells: [out - inp >= 0 ? 'Net tax payable' : 'Net tax refundable', '', out - inp] },
     ] };
   },
+  channel() { return channelReport(); },
+  margin() { return marginReport(); },
+  vat() { return vatReport(); },
   ledger() {
     if (!byId('accounts', UI.ledgerAcc)) UI.ledgerAcc = banks()[0]?.id || S.accounts[0]?.id;
     const a = byId('accounts', UI.ledgerAcc);
